@@ -69,6 +69,9 @@ export component App inherits Window {
     in-out property <string> pairLinkText;
 
     in-out property <[SessionInfo]> sessions: [];
+    // Unfiltered source list; `sessions` is the filtered view shown in the drawer.
+    in-out property <[SessionInfo]> allSessions: [];
+    in-out property <string> drawerFilter: "";
     in-out property <string> activeSessionId;
     in-out property <string> activeSessionName: "Synapse";
     in-out property <string> activeSessionSub: "no session";
@@ -83,6 +86,8 @@ export component App inherits Window {
     // Non-blocking toast for transient errors / disconnect notices.
     in-out property <string> toast;
     in-out property <bool> showToast: false;
+    // Index of the message whose code block was just copied (-1 = none). Drives the "Copied!" flash.
+    in-out property <int> copiedIndex: -1;
 
     callback pairClicked(string);
     callback connectClicked();
@@ -95,6 +100,8 @@ export component App inherits Window {
     callback stopClicked();
     // Tap a suggested-prompt chip in the empty state.
     callback suggestionClicked(string);
+    callback copyText(int, string);
+    callback drawerFilterChanged(string);
 
     // ===== Pairing view (login screen) =====
     if root.view == "pairing" : VerticalLayout {
@@ -498,6 +505,25 @@ export component App inherits Window {
                                         letter-spacing: 0.5px;
                                     }
                                     Rectangle { horizontal-stretch: 1; }
+                                    // Copy button — copies the code body to the
+                                    // clipboard via the copyText callback (Rust
+                                    // handles the platform clipboard). Shows a
+                                    // brief "Copied!" flash via copiedIndex.
+                                    Rectangle {
+                                        width: copyLbl.preferred-width + 18px;
+                                        height: 20px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-radius: 6px;
+                                        background: root.copiedIndex == i ? #313244 : #00000000;
+                                        TouchArea { clicked => { root.copyText(i, msg.text); } }
+                                        copyLbl := Text {
+                                            text: root.copiedIndex == i ? "✓ Copied" : "Copy";
+                                            font-size: 11px; font-weight: 600;
+                                            color: root.copiedIndex == i ? #a6e3a1 : #9a9aa8;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
                                 }
                             }
                             Rectangle {
@@ -686,6 +712,21 @@ export component App inherits Window {
                             padding-left: 14px;
                             alignment: start;
                             Text { text: "+  New session"; color: Theme.text; font-weight: 600; font-size: 15px; vertical-alignment: center; }
+                        }
+                    }
+                }
+                // Search / filter box — narrows the session list by name or cwd.
+                HorizontalLayout {
+                    padding-left: 12px; padding-right: 12px; padding-bottom: 4px;
+                    Rectangle {
+                        height: 40px;
+                        border-radius: Theme.radiusSm;
+                        background: Theme.bgElev;
+                        border-width: 1px; border-color: Theme.border;
+                        LineEdit {
+                            placeholder-text: "Search sessions";
+                            text: root.drawerFilter;
+                            edited => { root.drawerFilter = self.text; root.drawerFilterChanged(self.text); }
                         }
                     }
                 }

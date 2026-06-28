@@ -287,6 +287,67 @@ pub async fn run_app() -> anyhow::Result<()> {
         });
     }
 
+    // --- copy code block to clipboard (desktop: arboard). Flashes "Copied".
+    {
+        let weak = app.as_weak();
+        app.on_copyText(move |idx, text| {
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set_text(text.to_string());
+                }
+            }
+            if let Some(app) = weak.upgrade() {
+                app.set_copiedIndex(idx);
+                let weak2 = app.as_weak();
+                slint::spawn_local(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
+                    if let Some(app) = weak2.upgrade() {
+                        // only clear if still showing this one (avoids clobbering a newer copy)
+                        if app.get_copiedIndex() == idx {
+                            app.set_copiedIndex(-1);
+                        }
+                    }
+                }).unwrap();
+            }
+        });
+    }
+
+    // --- drawer search: recompute the visible session list from allSessions ---
+    {
+        let weak = app.as_weak();
+        app.on_drawerFilterChanged(move |_filter| {
+            let app = match weak.upgrade() {
+                Some(a) => a,
+                None => return,
+            };
+            let all = app.get_allSessions();
+            let filter = app.get_drawerFilter().to_lowercase();
+            let filtered: Vec<SessionInfo> = if filter.trim().is_empty() {
+                all.iter().map(|si| SessionInfo {
+                    id: si.id.clone(),
+                    name: si.name.clone(),
+                    cwd: si.cwd.clone(),
+                    model: si.model.clone(),
+                    state: si.state.clone(),
+                    attached: si.attached,
+                }).collect()
+            } else {
+                all.iter().filter(|si| {
+                    si.name.to_lowercase().contains(&filter) || si.cwd.to_lowercase().contains(&filter)
+                }).map(|si| SessionInfo {
+                    id: si.id.clone(),
+                    name: si.name.clone(),
+                    cwd: si.cwd.clone(),
+                    model: si.model.clone(),
+                    state: si.state.clone(),
+                    attached: si.attached,
+                }).collect()
+            };
+            app.set_sessions(model_rc(filtered));
+        });
+    }
+
     // --- pulse timer: toggle `pulse` every 700ms so the typing dots breathe ---
     {
         let weak = app.as_weak();
@@ -595,11 +656,11 @@ fn handle_event(app: &App, msg: serde_json::Value) {
     match ty {
         "hello" => {
             let sessions = parse_sessions(msg.get("sessions"));
-            app.set_sessions(model_rc(sessions));
+            apply_sessions(app, sessions);
         }
         "sessions" => {
             let sessions = parse_sessions(msg.get("sessions"));
-            app.set_sessions(model_rc(sessions));
+            apply_sessions(app, sessions);
         }
         "created" => {
             if let Some(s) = msg.get("session") {
@@ -650,6 +711,24 @@ fn handle_event(app: &App, msg: serde_json::Value) {
         }
         _ => {}
     }
+}
+
+fn apply_sessions(app: &App, sessions: Vec<SessionInfo>) {
+    // Keep the unfiltered source list, then derive the visible list from the
+    // current drawer filter (case-insensitive substring over name + cwd).
+    app.set_allSessions(model_rc(sessions.clone()));
+    let filter = app.get_drawerFilter().to_lowercase();
+    let filtered: Vec<SessionInfo> = if filter.trim().is_empty() {
+        sessions
+    } else {
+        sessions
+            .into_iter()
+            .filter(|si| {
+                si.name.to_lowercase().contains(&filter) || si.cwd.to_lowercase().contains(&filter)
+            })
+            .collect()
+    };
+    app.set_sessions(model_rc(filtered));
 }
 
 fn parse_sessions(v: Option<&serde_json::Value>) -> Vec<SessionInfo> {
