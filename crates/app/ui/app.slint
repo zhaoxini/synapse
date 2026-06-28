@@ -47,6 +47,7 @@ struct MsgBlock {
     expanded: bool,
     toolId: string,
     codeLang: string,
+    time: string,
 }
 
 export component App inherits Window {
@@ -76,6 +77,12 @@ export component App inherits Window {
     in-out property <string> composerText;
     in-out property <bool> busy: false;
     in-out property <bool> reconnecting: false;
+    // Typing indicator: pulse tick (toggled from Rust) + whether to show dots.
+    in-out property <bool> pulse: false;
+    in-out property <bool> showTyping: true;
+    // Non-blocking toast for transient errors / disconnect notices.
+    in-out property <string> toast;
+    in-out property <bool> showToast: false;
 
     callback pairClicked(string);
     callback connectClicked();
@@ -86,6 +93,8 @@ export component App inherits Window {
     callback refreshClicked();
     callback toggleTool(int);
     callback stopClicked();
+    // Tap a suggested-prompt chip in the empty state.
+    callback suggestionClicked(string);
 
     // ===== Pairing view (login screen) =====
     if root.view == "pairing" : VerticalLayout {
@@ -311,10 +320,30 @@ export component App inherits Window {
             height: root.reconnecting ? 30px : 0px;
             background: Theme.warn;
             animate height { duration: 200ms; }
-            Text {
-                text: "Reconnecting…";
-                font-size: 12px; color: #ffffff; font-weight: 600;
-                horizontal-alignment: center; vertical-alignment: center;
+           Text {
+               text: "Reconnecting…";
+               font-size: 12px; color: #ffffff; font-weight: 600;
+               horizontal-alignment: center; vertical-alignment: center;
+           }
+       }
+        // Toast — transient, non-blocking notice (errors, disconnects).
+        if root.showToast : Rectangle {
+            height: 38px;
+            background: Theme.danger;
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 12px; spacing: 8px;
+                Text {
+                    text: root.toast;
+                    font-size: 12.5px; color: #ffffff; font-weight: 600;
+                    vertical-alignment: center; horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 24px; height: 24px; border-radius: 12px;
+                    y: (parent.height - self.height) / 2;
+                    TouchArea { clicked => { root.showToast = false; } }
+                    Text { text: "✕"; font-size: 13px; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+                }
             }
         }
 
@@ -348,10 +377,39 @@ export component App inherits Window {
                             font-size: 20px; font-weight: 700; color: Theme.text;
                             horizontal-alignment: center;
                         }
-                        Text {
-                            text: "Send a prompt to start driving Claude Code.";
-                            font-size: 14px; color: Theme.textDim;
-                            horizontal-alignment: center;
+                       Text {
+                           text: "Send a prompt to start driving Claude Code.";
+                           font-size: 14px; color: Theme.textDim;
+                           horizontal-alignment: center;
+                       }
+                   }
+                    // Suggested-prompt chips — tap to fill the composer.
+                    VerticalLayout {
+                        padding-top: 28px; padding-left: 28px; padding-right: 28px;
+                        spacing: 10px;
+                        suggestion := Rectangle {
+                            height: 44px;
+                            border-radius: Theme.radiusSm;
+                            background: Theme.bgElev;
+                            border-width: 1px; border-color: Theme.border;
+                            TouchArea { clicked => { root.suggestionClicked("Summarize the recent changes in this repo."); } }
+                            Text { text: "📝  Summarize recent changes"; font-size: 14px; color: Theme.text; vertical-alignment: center; x: 14px; }
+                        }
+                        Rectangle {
+                            height: 44px;
+                            border-radius: Theme.radiusSm;
+                            background: Theme.bgElev;
+                            border-width: 1px; border-color: Theme.border;
+                            TouchArea { clicked => { root.suggestionClicked("Explain what this project does."); } }
+                            Text { text: "💡  Explain this project"; font-size: 14px; color: Theme.text; vertical-alignment: center; x: 14px; }
+                        }
+                        Rectangle {
+                            height: 44px;
+                            border-radius: Theme.radiusSm;
+                            background: Theme.bgElev;
+                            border-width: 1px; border-color: Theme.border;
+                            TouchArea { clicked => { root.suggestionClicked("Find and fix any failing tests."); } }
+                            Text { text: "🧪  Fix failing tests"; font-size: 14px; color: Theme.text; vertical-alignment: center; x: 14px; }
                         }
                     }
                 }
@@ -492,6 +550,51 @@ export component App inherits Window {
                             Rectangle {
                                 visible: msg.role == "user";
                                 width: 28px;
+                            }
+                        }
+                       // Timestamp — subtle, under the message.
+                       Text {
+                           visible: msg.time != "";
+                           text: msg.time;
+                           font-size: 10px; color: Theme.textFaint;
+                           horizontal-alignment: msg.role == "user" ? right : left;
+                       }
+                   }
+               }
+                // Streaming indicator — a soft pulsing dot row shown while
+                // Claude is responding and no assistant text has streamed
+                // yet. The `pulse` property is toggled every ~700ms from
+                // Rust; each dot binds opacity to it so the row breathes.
+                HorizontalLayout {
+                    visible: root.busy && root.showTyping;
+                    padding-left: 4px; padding-top: 2px; spacing: 4px;
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 14px;
+                        background: Theme.accent;
+                        Text { text: "✦"; color: #ffffff; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        height: 28px;
+                        HorizontalLayout {
+                            alignment: start; spacing: 5px;
+                            y: (parent.height - self.height) / 2;
+                            Rectangle {
+                                width: 7px; height: 7px; border-radius: 4px;
+                                background: Theme.textFaint;
+                                opacity: root.pulse ? 0.9 : 0.3;
+                                animate opacity { duration: 350ms; }
+                            }
+                            Rectangle {
+                                width: 7px; height: 7px; border-radius: 4px;
+                                background: Theme.textFaint;
+                                opacity: root.pulse ? 0.6 : 0.3;
+                                animate opacity { duration: 350ms; }
+                            }
+                            Rectangle {
+                                width: 7px; height: 7px; border-radius: 4px;
+                                background: Theme.textFaint;
+                                opacity: root.pulse ? 0.3 : 0.9;
+                                animate opacity { duration: 350ms; }
                             }
                         }
                     }

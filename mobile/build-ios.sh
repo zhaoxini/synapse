@@ -52,6 +52,7 @@ if xcrun xcodebuild -version >/dev/null 2>&1; then
       -sdk iphoneos \
       -derivedDataPath build \
       "${TEAM_FLAG[@]}" \
+      -allowProvisioningUpdates \
       build || echo "(xcodebuild failed; open $ROOT/mobile/ios/Synapse.xcodeproj in Xcode to run on a device.)"
   )
 else

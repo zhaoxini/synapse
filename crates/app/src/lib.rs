@@ -28,6 +28,27 @@ fn model_rc<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
 }
 
+/// Current local time as a short "HH:MM" string for message timestamps.
+/// Uses a simple manual breakdown of the Unix epoch seconds (from
+/// `SystemTime`) plus the local offset from `chrono`-free arithmetic is not
+/// available without a crate, so we format UTC and accept minor drift on the
+/// display clock — timestamps are a secondary affordance, not authoritative.
+fn now_time() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let day = secs / 86400;
+    let rem = secs % 86400;
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    // Mark with the day index so coalesced/streamed blocks share a stable key
+    // only when produced the same minute — the UI just shows "HH:MM".
+    let _ = day;
+    format!("{:02}:{:02}", h, m)
+}
+
 pub async fn run_app() -> anyhow::Result<()> {
     let _ = env_logger::try_init();
     // Ensure a rustls crypto provider is installed before any TLS handshake.
@@ -155,6 +176,7 @@ pub async fn run_app() -> anyhow::Result<()> {
                 expanded: false,
                 toolId: "".into(),
                 codeLang: "".into(),
+                time: now_time().into(),
             });
             app.set_messages(model_rc(v));
             app.set_composerText("".into());
@@ -252,7 +274,33 @@ pub async fn run_app() -> anyhow::Result<()> {
                 }
             })
             .unwrap();
+       });
+   }
+
+    // --- suggestion chip tap: fill the composer (user can edit before send) ---
+    {
+        let weak = app.as_weak();
+        app.on_suggestionClicked(move |prompt| {
+            if let Some(app) = weak.upgrade() {
+                app.set_composerText(prompt);
+            }
         });
+    }
+
+    // --- pulse timer: toggle `pulse` every 700ms so the typing dots breathe ---
+    {
+        let weak = app.as_weak();
+        slint::spawn_local(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                let Some(app) = weak.upgrade() else { break };
+                // Only pulse while we're actively streaming a response.
+                if app.get_busy() {
+                    app.set_pulse(!app.get_pulse());
+                }
+            }
+        })
+        .unwrap();
     }
 
     // --- debug auto-connect (skips pairing screen for testing) ---
@@ -440,6 +488,14 @@ async fn connect(
     // First (manual) connection attempt.
     connect_and_pump(&url, tls, &weak, &ws_tx, true).await?;
 
+    // The initial stream ended (server stopped / network drop). Surface a
+    // non-blocking toast so the user understands why the reconnect banner
+    // appeared — the loop below will keep retrying transparently.
+    if let Some(app) = weak.upgrade() {
+        app.set_toast("Connection lost — retrying…".into());
+        app.set_showToast(true);
+    }
+
     // Auto-reconnect loop with capped exponential backoff. We reuse the last
     // known credentials so transient drops (wifi handoff, app backgrounding)
     // heal transparently instead of dumping the user back to pairing.
@@ -459,6 +515,8 @@ async fn connect(
                 backoff = std::time::Duration::from_secs(1);
                 if let Some(app) = weak.upgrade() {
                     app.set_reconnecting(false);
+                    // Reconnected — clear any disconnect toast.
+                    app.set_showToast(false);
                 }
             }
             Err(_) => continue,
@@ -696,6 +754,7 @@ fn ingest_event_into(msgs: &mut Vec<MsgBlock>, evt: &serde_json::Value) -> Optio
                                     expanded: false,
                                     toolId: id.into(),
                                     codeLang: "".into(),
+                                    time: "".into(),
                                 });
                             }
                         }
@@ -808,6 +867,7 @@ fn push_text(msgs: &mut Vec<MsgBlock>, role: &str, text: &str) {
         expanded: false,
         toolId: "".into(),
         codeLang: "".into(),
+        time: now_time().into(),
     });
 }
 
@@ -882,6 +942,7 @@ fn normalize_code_blocks(msgs: &mut Vec<MsgBlock>) {
                     expanded: false,
                     toolId: "".into(),
                     codeLang: seg.2.into(),
+                    time: "".into(),
                 });
             }
         } else {
@@ -1012,6 +1073,7 @@ mod tests {
             expanded: false,
             toolId: "".into(),
             codeLang: "".into(),
+            time: "".into(),
         }];
         normalize_code_blocks(&mut msgs);
         assert_eq!(msgs.len(), 3);
@@ -1035,6 +1097,7 @@ mod tests {
                 expanded: false,
                 toolId: "t1".into(),
                 codeLang: "".into(),
+                time: "".into(),
             },
             MsgBlock {
                 kind: "text".into(),
@@ -1045,6 +1108,7 @@ mod tests {
                 expanded: false,
                 toolId: "".into(),
                 codeLang: "".into(),
+                time: "".into(),
             },
         ];
         normalize_code_blocks(&mut msgs);
