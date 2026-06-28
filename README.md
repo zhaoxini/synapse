@@ -30,6 +30,7 @@ circular avatar, pill-shaped floating composer, minimal top bar).
 |-------|------|
 | `crates/server` | axum + tokio-tungstenite service. Spawns `claude -p --output-format stream-json`, parses events, broadcasts to clients, and attaches to existing Claude Code sessions. |
 | `crates/app` | Slint 1.7 pure-Rust UI (`backend-winit` + `renderer-femtovg`) that connects to the server over WS. |
+| `crates/relay` | `synapse-relay`: public WebSocket relay (deploy on a VPS) that bridges mobile apps to self-hosted servers over the internet. |
 | `web/` | Original Node.js prototype, kept as a design reference. Not required to run the Rust app. |
 
 ## Requirements
@@ -85,6 +86,63 @@ server at your cert/key instead:
 ```sh
 ./target/release/synapse-server --port 443 --token CODE   --tls --tls-cert /etc/letsencrypt/live/my.domain/fullchain.pem   --tls-key  /etc/letsencrypt/live/my.domain/privkey.pem
 ```
+
+### Remote access via self-hosted relay (productized, public internet)
+
+For a **fully productized** remote-access experience — where every user's
+machine is reachable from anywhere on the public internet with no public IP,
+port forwarding, NAT traversal, or per-user tunnel setup — run a central
+**Synapse relay** on your own server (VPS) with a domain and a real TLS
+certificate. Each user's local `synapse-server` dials the relay with an
+outbound `wss` connection; the mobile app reaches the user's machine through
+the relay.
+
+```
+   mobile app  --wss-->  relay (your VPS, real cert)  <--wss--  synapse-server
+                         (pure forwarder, never touches claude)
+```
+
+**1. Build and run the relay** (on your VPS, e.g. `relay.example.com`):
+
+```sh
+cargo build --release -p synapse-relay
+./target/release/synapse-relay \
+  --port 443 \
+  --tls-cert /etc/letsencrypt/live/relay.example.com/fullchain.pem \
+  --tls-key  /etc/letsencrypt/live/relay.example.com/privkey.pem \
+  --api-token RELAYSECRET   # optional shared secret the servers must present
+```
+
+The relay terminates TLS with a real certificate (Let's Encrypt, etc.) and
+exposes two endpoints: `/uplink` (servers register) and `/connect` (apps reach
+a device). It never spawns or talks to the `claude` CLI and never interprets the
+app/server protocol — it only authenticates (`deviceId` + per-device token) and
+shuttles frames both ways.
+
+**2. Point each user's server at the relay:**
+
+```sh
+./target/release/synapse-server --port 4173 --token CODE \
+  --relay "wss://relay.example.com/uplink" \
+  --relay-device-id my-laptop \
+  --relay-token CODE
+```
+
+The server makes an **outbound-only** `wss` connection to the relay (so it works
+behind any NAT / firewall that allows outbound traffic). It prints a pairing QR
+of the form `synapse://relay.example.com/connect?deviceId=my-laptop&token=CODE&tls=1`,
+which the app scans to bind and reach the machine from anywhere.
+
+**3. Pair the app:** scan the QR (or open the pairing link). The app connects to
+`wss://relay.example.com/connect?deviceId=...&token=...`; the relay links it to
+the device's uplink and transparently forwards all traffic.
+
+This is the recommended path for a multi-user product: zero per-user network
+configuration, real TLS everywhere, and the relay can later host accounts /
+metering / billing with no client changes. Use a **named** host with a fixed
+certificate (as above) for production SLAs; the `--tunnel` (Cloudflare quick
+tunnel) option below is a zero-cost single-user alternative with a random
+hostname per run.
 
 ### Remote access from anywhere (Cloudflare Tunnel, no setup)
 
@@ -151,6 +209,9 @@ details by hand.
 | `--tls-key-out` | — | Persist the generated self-signed key (PEM) to this path |
 | `--pair-host` | auto (LAN IP) | Host encoded in the pairing QR / URL (override for a public hostname/IP) |
 | `--tunnel` | off | Expose via Cloudflare Tunnel: public `wss://` with a real cert, reachable from anywhere (no NAT/router setup) |
+| `--relay` | — | Outbound uplink to a self-hosted Synapse relay (`wss://host/uplink`) for productized public-internet access |
+| `--relay-device-id` | random id | Device id registered at the relay |
+| `--relay-token` | = `--token` | Per-device token the app must present to reach this device via the relay |
 | `--dev` | off | Verbose logging |
 
 ## Run the app
@@ -274,6 +335,7 @@ declares the `NativeActivity` and `INTERNET` permission.
 ```
 crates/
   server/   axum + WS bridge to `claude -p`
+  relay/    synapse-relay: public WS relay (VPS) for internet-wide remote access
     src/
       main.rs      CLI entry + arg parsing
       http.rs      HTTP routes + WS command/event loop

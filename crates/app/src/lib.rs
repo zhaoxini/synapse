@@ -485,6 +485,16 @@ async fn connect_and_pump(
     let (tx, mut rx) = stream.split();
     *ws_tx.lock().await = Some(tx);
 
+    // Prime the pump: request the session list right away. Over a relay the
+    // server's initial "hello" can be delivered before the app is linked, so
+    // we explicitly ask for sessions (and history on reconnect) to guarantee a
+    // fresh response regardless of transport.
+    if let Some(t) = ws_tx.lock().await.as_mut() {
+        let _ = t
+            .send(Message::Text(serde_json::json!({"op":"list"}).to_string()))
+            .await;
+    }
+
     if first {
         if let Some(app) = weak.upgrade() {
             app.set_connecting(false);

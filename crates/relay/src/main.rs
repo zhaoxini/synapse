@@ -64,7 +64,9 @@ pub struct AppState {
 
 #[derive(Deserialize)]
 struct DeviceQ {
+    #[serde(default, alias = "deviceId")]
     device_id: Option<String>,
+    #[serde(default)]
     token: Option<String>,
 }
 
