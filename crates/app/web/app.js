@@ -207,7 +207,6 @@ function renderStream(mid) {
     const sub = t.name === "Bash" ? firstLine(t.input) : "";
     body.appendChild(cardEl("tool", "✦", t.name, sub, t.input, t.status));
   }
-  rehighlight(body);
 }
 
 function ingestResult(evt) {
@@ -258,17 +257,11 @@ function ingestHistory(events) {
 }
 
 // =================== rendering primitives ===================
+// Synara style: assistant blocks are full-width with no avatar; user messages
+// are right-aligned compact bubbles. No avatar column at all.
 function mkMsg(role) {
   const el = document.createElement("div");
   el.className = "msg " + (role === "user" ? "user" : "assistant");
-  if (role !== "user") {
-    const a = document.createElement("div");
-    a.className = "avatar"; a.textContent = "✦";
-    el.appendChild(a);
-  } else {
-    const sp = document.createElement("div"); sp.style.flex = "0 0 28px";
-    el.appendChild(sp);
-  }
   const body = document.createElement("div");
   body.className = "body";
   el.appendChild(body);
@@ -279,13 +272,16 @@ function mdEl(md) {
   const d = document.createElement("div");
   d.className = "md";
   d.innerHTML = marked.parse(md);
-  return d;
-}
-
-function rehighlight(root) {
-  root.querySelectorAll("pre code").forEach((b) => {
-    try { hljs.highlightElement(b); } catch {}
+  // Upgrade marked's bare <pre><code> into Synara code cards (lang label + Copy).
+  d.querySelectorAll("pre > code").forEach((codeEl) => {
+    const pre = codeEl.parentElement;
+    const cls = codeEl.className || "";
+    const m = cls.match(/language-([\w+-]+)/);
+    const lang = m ? m[1] : "";
+    const card = codeCard(lang, codeEl.textContent || "");
+    pre.replaceWith(card);
   });
+  return d;
 }
 
 function cardEl(kind, icon, name, sub, bodyText, status) {
@@ -296,7 +292,7 @@ function cardEl(kind, icon, name, sub, bodyText, status) {
   head.innerHTML = `<span class="ic">${icon}</span>` +
     `<span class="nm">${escapeHtml(name)}${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}</span>` +
     (status !== undefined ? `<span class="st ${status}"></span>` : "") +
-    `<span class="chev">▾</span>`;
+    `<span class="chev">▸</span>`;
   const body = document.createElement("div");
   body.className = "card-body";
   body.textContent = bodyText || "";
@@ -357,12 +353,12 @@ function echoUser(text, mid) {
     const existing = state.blocks.find(b => b.role === "user" && b.mid === mid);
     if (existing) return;
   }
-  const el = mkMsg("user");
+  const el = document.createElement("div");
+  el.className = "msg user";
   const bubble = document.createElement("div");
   bubble.className = "bubble";
   bubble.textContent = text;
-  const body = el.querySelector(".body");
-  body.appendChild(bubble);
+  el.appendChild(bubble);
   state.blocks.push({ el, role: "user", mid });
   messagesEl.appendChild(el);
   emptyEl.classList.add("hidden");
@@ -447,10 +443,10 @@ function renderSessions() {
     const it = document.createElement("div");
     it.className = "s-item" + (s.id === state.activeId ? " active" : "");
     const stCls = s.state === "busy" ? " busy" : (s.state === "error" ? " error" : "");
+    const dir = (s.cwd || "").split("/").filter(Boolean).pop() || s.cwd || "";
     it.innerHTML =
-      `<div class="nm"><span class="st${stCls}"></span><span>${escapeHtml(s.name || "Session")}</span></div>` +
-      `<div class="model">${escapeHtml(s.model || "—")}</div>` +
-      `<div class="cwd">${escapeHtml(s.cwd || "")}</div>`;
+      `<div class="nm"><span class="st${stCls}"></span><span class="label">${escapeHtml(s.name || "Session")}</span></div>` +
+      `<div class="meta">${escapeHtml(dir)}${s.model ? " · " + escapeHtml(s.model) : ""}</div>`;
     it.addEventListener("click", () => select(s.id));
     list.appendChild(it);
   }
@@ -462,6 +458,11 @@ function select(id) {
     titleName.textContent = s.name || "Session";
     subText.textContent = s.model || s.cwd || "session";
     dot.className = s.state === "busy" ? "busy" : (s.state === "error" ? "error" : "");
+    // composer controls + empty-state subtitle reflect the active session
+    const dir = (s.cwd || "").split("/").filter(Boolean).pop() || "";
+    const ml = $("modelLabel"); if (ml) ml.textContent = s.model || "Model";
+    const ll = $("localLabel"); if (ll && dir) ll.textContent = dir;
+    const es = $("emptySub"); if (es) es.textContent = dir || "";
   }
   clearMessages();
   state.streamBuf.clear();

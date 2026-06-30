@@ -34,23 +34,28 @@
   <!-- "new messages" pill -->
   <button id="newPill">↓ New</button>
 
-  <!-- Empty state -->
+  <!-- Empty state — Synara: logo + "Let's build" -->
   <div id="empty">
     <div class="brand">✦</div>
-    <h1>How can I help with your code?</h1>
-    <p>Send a prompt to start driving Claude Code.</p>
+    <h1>Let's build</h1>
+    <p id="emptySub"></p>
     <div class="suggestions">
-      <button data-prompt="Summarize the recent changes in this repo.">📝  Summarize recent changes</button>
-      <button data-prompt="Explain what this project does.">💡  Explain this project</button>
-      <button data-prompt="Find and fix any failing tests.">🧪  Fix failing tests</button>
+      <button data-prompt="Summarize the recent changes in this repo.">Summarize recent changes</button>
+      <button data-prompt="Explain what this project does.">Explain this project</button>
+      <button data-prompt="Find and fix any failing tests.">Find and fix failing tests</button>
     </div>
   </div>
 
-  <!-- Composer -->
+  <!-- Composer — Synara stacked panel: input + bottom control row -->
   <footer id="composer">
     <div id="composerRow">
-      <textarea id="input" rows="1" placeholder="Send a message"></textarea>
-      <button id="sendBtn" aria-label="Send">↑</button>
+      <textarea id="input" rows="1" placeholder="Ask for follow-up changes or attach images"></textarea>
+      <div id="composerControls">
+        <span class="ctl" id="localCtl"><span class="ico">⎇</span><span id="localLabel">Local</span></span>
+        <span class="ctl" id="modelCtl"><span class="ico">◆</span><span id="modelLabel">Model</span></span>
+        <span class="spacer"></span>
+        <button id="sendBtn" aria-label="Send">↑</button>
+      </div>
     </div>
   </footer>
 
