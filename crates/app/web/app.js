@@ -23,6 +23,7 @@ const state = {
   connected: false,
   busy: false,
   view: "sessions", // "sessions" | "chat"
+  creating: false,
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
@@ -159,6 +160,7 @@ function buildUrl(c) {
 function connect() {
   const c = creds();
   if (!c) { showConnectOverlay(); return; }
+  hideConnectOverlay();
   window.__SYNAPSE__ = c;
   state.url = buildUrl(c);
   doConnect(true);
@@ -225,6 +227,7 @@ function handle(v) {
       break;
     case "sessions": setSessions(v.sessions || []); break;
     case "created":
+      state.creating = false;
       setSessions(state.sessions); // list update follows via event
       select(v.session.id);
       // The pick has been consumed by create; clear it so currentCwd()/
@@ -246,6 +249,8 @@ function handle(v) {
       break;
     case "event": handleEvent(v.event); break;
     case "error":
+      state.creating = false;
+      renderSessions();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -1454,24 +1459,41 @@ function dayGroup(ms) {
 
 function sessionSubtitle(s) {
   if (s.state === "busy") return { text: "Working", cls: "working" };
-  if (s.state === "error") return { text: "Failed", cls: "error" };
+  if (s.state === "error") return { text: "Check failed", cls: "error" };
   const t = s.started_at || 0;
   return t ? { text: relTime(t), cls: "" } : { text: "", cls: "" };
 }
+
+let navFromPop = false;
 
 function showSessions() {
   state.view = "sessions";
   document.body.classList.add("mode-sessions");
   document.body.classList.remove("mode-chat");
+  closeSearch();
   updateTopbar();
   renderSessions();
 }
 
-function showChat() {
+function showChat(pushHistory) {
   state.view = "chat";
   document.body.classList.remove("mode-sessions");
   document.body.classList.add("mode-chat");
+  closeSearch();
   updateTopbar();
+  if (pushHistory !== false && !navFromPop) {
+    history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
+  }
+  requestAnimationFrame(() => { if (inputEl) inputEl.focus(); });
+}
+
+function closeSearch() {
+  const wrap = $("searchWrap");
+  if (!wrap.classList.contains("hidden")) {
+    wrap.classList.add("hidden");
+    $("search").value = "";
+    $("searchBtn").classList.remove("active");
+  }
 }
 
 function updateTopbar() {
@@ -1491,12 +1513,28 @@ function renderSessions() {
     .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q))
     .sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
 
-  if (!f.length) {
+  if (!f.length && !state.creating) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    hint.textContent = q ? "No matching sessions" : "No sessions yet — tap + to start";
+    hint.innerHTML = q
+      ? "No matching sessions"
+      : `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
+    if (!q) hint.querySelector(".empty-cta").addEventListener("click", newSession);
     list.appendChild(hint);
     return;
+  }
+
+  if (state.creating) {
+    const row = document.createElement("div");
+    row.className = "sess-row creating";
+    row.innerHTML =
+      `<div class="sess-icon">…</div>` +
+      `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
+      `<div class="sess-sub working">Working</div></div>`;
+    const head = document.createElement("div");
+    head.className = "s-time"; head.textContent = "Today";
+    list.appendChild(head);
+    list.appendChild(row);
   }
 
   const groups = new Map();
@@ -1564,8 +1602,6 @@ function select(id) {
   send({ op: "history", sessionId: id, limit: 400 });
   showChat();
 }
-
-// =================== composer ===================
 function autoGrow() {
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
@@ -1579,8 +1615,7 @@ function updateSend() {
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && window.__SYNAPSE__) {
-    // mobile uses the button; on desktop Enter sends
+  if (e.key === "Enter" && !e.shiftKey && state.view === "chat") {
     e.preventDefault(); doSend();
   }
 });
@@ -1606,22 +1641,36 @@ function doSend() {
 }
 
 // =================== navigation ===================
-$("backBtn").addEventListener("click", showSessions);
+$("backBtn").addEventListener("click", () => {
+  if (history.state && history.state.synapse === "chat") history.back();
+  else showSessions();
+});
+window.addEventListener("popstate", () => {
+  if (state.view === "chat") {
+    navFromPop = true;
+    showSessions();
+    navFromPop = false;
+  }
+});
 $("newBtn").addEventListener("click", newSession);
 $("refreshBtn").addEventListener("click", () => send({ op: "refresh" }));
 $("searchBtn").addEventListener("click", () => {
   const wrap = $("searchWrap");
   const hidden = wrap.classList.toggle("hidden");
+  $("searchBtn").classList.toggle("active", !hidden);
   if (!hidden) $("search").focus();
   else { $("search").value = ""; renderSessions(); }
 });
 $("search").addEventListener("input", renderSessions);
 
 function newSession() {
+  if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
   if (state.pendingCwd) opts.cwd = state.pendingCwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
+  state.creating = true;
+  renderSessions();
   send({ op: "create", opts });
 }
 
@@ -1779,6 +1828,7 @@ function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
 initAttachMenu();
+if (creds()) hideConnectOverlay();
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
