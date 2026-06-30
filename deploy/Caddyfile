@@ -1,0 +1,27 @@
+# Caddy: static web UI + WebSocket proxy to synapse-server.
+# Set SITE_ADDRESS to your domain for automatic HTTPS, or :80 for local/LAN.
+
+{
+	# email you@example.com
+}
+
+{$SITE_ADDRESS::80} {
+	root * /srv/web
+
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade *websocket*
+	}
+	handle @websocket {
+		reverse_proxy synapse:4173
+	}
+
+	handle /api/* {
+		reverse_proxy synapse:4173
+	}
+
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

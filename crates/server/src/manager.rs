@@ -25,6 +25,14 @@ pub struct SessionSummary {
     pub state: SessionState,
     pub started_at: u64,
     pub attached: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub diff_adds: u32,
+    #[serde(default)]
+    pub diff_dels: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -58,11 +66,15 @@ pub struct SessionManager {
     default_cwd: PathBuf,
     default_model: Option<String>,
     catalog: Vec<ModelInfo>,
-    cwds: Vec<String>,
+    cwds: Mutex<Vec<String>>,
     sessions: Mutex<HashMap<String, Entry>>,
     subscribers: Mutex<Vec<mpsc::Sender<Value>>>,
     /// User title overrides (session id → name) from `rename`.
     renames: Mutex<HashMap<String, String>>,
+    /// Pinned sessions sort to the top of the list.
+    pinned: Mutex<HashSet<String>>,
+    /// Soft-hidden sessions (reversible via `unarchive`).
+    archived: Mutex<HashSet<String>>,
     /// Session ids (local + cc) hidden by `delete`, so a refresh/attach won't
     /// resurrect them. ponytail: in-memory — a deleted session reappears after a
     /// server restart; persist to ~/.synapse if that ever matters.
@@ -117,16 +129,19 @@ impl SessionManager {
         let cwds = discover_projects();
         info!(models = catalog.len(), projects = cwds.len(), default = %default, "config ready");
         let default_model = Some(default).filter(|s| !s.is_empty());
+        let meta = load_meta_sync();
         Arc::new(Self {
             bin,
             default_cwd,
             default_model,
             catalog,
-            cwds,
+            cwds: Mutex::new(cwds),
             sessions: Mutex::new(HashMap::new()),
             subscribers: Mutex::new(Vec::new()),
-            renames: Mutex::new(HashMap::new()),
-            hidden: Mutex::new(HashSet::new()),
+            renames: Mutex::new(meta.renames),
+            pinned: Mutex::new(meta.pinned.into_iter().collect()),
+            archived: Mutex::new(meta.archived.into_iter().collect()),
+            hidden: Mutex::new(meta.hidden.into_iter().collect()),
         })
     }
 
@@ -142,8 +157,15 @@ impl SessionManager {
 
     /// Known project working dirs (git repos from Claude Code config), for the
     /// composer's project picker.
-    pub fn cwds(&self) -> &[String] {
-        &self.cwds
+    pub async fn cwds(&self) -> Vec<String> {
+        self.cwds.lock().await.clone()
+    }
+
+    /// Re-scan ~/.claude.json projects and return the refreshed list.
+    pub async fn refresh_cwds(&self) -> Vec<String> {
+        let fresh = discover_projects();
+        *self.cwds.lock().await = fresh.clone();
+        fresh
     }
 
     pub async fn subscribe(&self) -> mpsc::Receiver<Value> {
@@ -201,6 +223,9 @@ impl SessionManager {
             .await
             .clone()
             .unwrap_or_else(|| id.to_string());
+        let pinned = self.pinned.lock().await.contains(id);
+        let archived = self.archived.lock().await.contains(id);
+        let (diff_adds, diff_dels) = crate::history::diff_stats(&cwd, &sid).await;
         // A user `rename` wins over the transcript-derived title.
         let name = match self.renames.lock().await.get(id).cloned() {
             Some(n) => Some(n),
@@ -219,6 +244,10 @@ impl SessionManager {
             state,
             started_at,
             attached,
+            pinned,
+            archived,
+            diff_adds,
+            diff_dels,
         }
     }
 
@@ -239,6 +268,11 @@ impl SessionManager {
         for (id, session, started_at, attached) in &snap {
             out.push(self.summary(id, session, *started_at, *attached).await);
         }
+        out.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then(b.started_at.cmp(&a.started_at))
+        });
         out
     }
 
@@ -418,6 +452,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -446,6 +481,92 @@ impl SessionManager {
             "type": "system", "subtype": "session_deleted", "sessionId": id
         }))
         .await;
+        self.persist_meta().await;
+        Ok(())
+    }
+
+    /// Pin a session to the top of the list.
+    pub async fn set_pinned(&self, id: &str, pinned: bool) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        {
+            let mut set = self.pinned.lock().await;
+            if pinned {
+                set.insert(id.to_string());
+            } else {
+                set.remove(id);
+            }
+        }
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        self.persist_meta().await;
+        Ok(())
+    }
+
+    /// Soft-hide a session (reversible with `unarchive`).
+    pub async fn archive(&self, id: &str) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        self.archived.lock().await.insert(id.to_string());
+        self.pinned.lock().await.remove(id);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        self.persist_meta().await;
+        Ok(())
+    }
+
+    /// Restore an archived session to the active list.
+    pub async fn unarchive(&self, id: &str) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        self.archived.lock().await.remove(id);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        self.persist_meta().await;
+        Ok(())
+    }
+
+    /// Archive multiple sessions in one call.
+    pub async fn archive_many(&self, ids: &[String]) -> Result<(), String> {
+        for id in ids {
+            if self.sessions.lock().await.contains_key(id) {
+                self.archive(id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Restore multiple archived sessions.
+    pub async fn unarchive_many(&self, ids: &[String]) -> Result<(), String> {
+        for id in ids {
+            if self.sessions.lock().await.contains_key(id) {
+                self.unarchive(id).await?;
+            }
+        }
         Ok(())
     }
 
@@ -566,6 +687,50 @@ impl SessionManager {
         }))
         .await;
         Some(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct SessionMetaFile {
+    #[serde(default)]
+    pinned: Vec<String>,
+    #[serde(default)]
+    archived: Vec<String>,
+    #[serde(default)]
+    renames: HashMap<String, String>,
+    #[serde(default)]
+    hidden: Vec<String>,
+}
+
+fn meta_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".synapse").join("session_meta.json"))
+        .unwrap_or_else(|| PathBuf::from(".synapse/session_meta.json"))
+}
+
+fn load_meta_sync() -> SessionMetaFile {
+    let path = meta_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+impl SessionManager {
+    async fn persist_meta(&self) {
+        let file = SessionMetaFile {
+            pinned: self.pinned.lock().await.iter().cloned().collect(),
+            archived: self.archived.lock().await.iter().cloned().collect(),
+            renames: self.renames.lock().await.clone(),
+            hidden: self.hidden.lock().await.iter().cloned().collect(),
+        };
+        let path = meta_path();
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(txt) = serde_json::to_string_pretty(&file) {
+            let _ = tokio::fs::write(path, txt).await;
+        }
     }
 }
 

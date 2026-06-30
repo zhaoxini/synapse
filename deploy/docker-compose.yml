@@ -1,0 +1,49 @@
+# Full-stack preview: web UI + synapse-server on one machine.
+# Claude Code CLI must be installed on this host (or mount your dev env).
+#
+# Usage:
+#   SYNAPSE_TOKEN=CODE SYNAPSE_CWD=/path/to/repo docker compose up -d --build
+#   Open https://your-domain  → paste synapse:// link once, or use same host WS via Caddy
+#
+# For internet access from phone: point a domain at this VPS and use Caddy TLS.
+
+services:
+  synapse:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    environment:
+      RUST_LOG: info
+    command:
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "4173"
+      - --token
+      - "${SYNAPSE_TOKEN:-CODE}"
+      - --cwd
+      - "${SYNAPSE_CWD:-/workspace}"
+    volumes:
+      - "${SYNAPSE_CWD:-.}:/workspace"
+      - "${HOME:-/root}/.claude:/root/.claude:ro"
+    expose:
+      - "4173"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ../crates/app/web:/srv/web:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - synapse
+
+volumes:
+  caddy_data:
+  caddy_config:

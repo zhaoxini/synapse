@@ -9,14 +9,16 @@
 marked.setOptions({ breaks: true, gfm: true });
 
 const $ = (id) => document.getElementById(id);
+
+function haptic(style) {
+  if (window.__synapseHaptic__) window.__synapseHaptic__(style || "light");
+}
 const messagesEl = $("messages");
 const scroller = $("scroller");
 const emptyEl = $("empty");
 const inputEl = $("input");
 const sendBtn = $("sendBtn");
 const titleName = $("titleName");
-const subText = $("subText");
-const dot = $("dot");
 
 const state = {
   ws: null,
@@ -24,6 +26,13 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
+  view: "sessions", // "sessions" | "chat" | "workspaces"
+  creating: false,
+  loadingHistory: false,
+  selectMode: false,
+  selectedIds: new Set(),
+  showArchived: false,
+  filterCwd: null,
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
@@ -42,14 +51,112 @@ const state = {
   msNow: 0,           // monotonic-ish clock fed from frames (no Date in workflow ctx, fine here)
 };
 
-// ---- credential injection from native (pairing) ----
+// ---- credential injection: native / URL / localStorage ----
+const CREDS_KEY = "synapse_creds";
+
 function creds() {
   if (window.__SYNAPSE__) return window.__SYNAPSE__;
-  // dev fallback from querystring
   const p = new URLSearchParams(location.search);
-  const h = p.get("host"), port = p.get("port"), tok = p.get("token");
-  if (h && tok) return { host: h, port: port || "4173", token: tok, tls: p.get("tls") === "1", path: p.get("path") || "" };
+  const h = p.get("host"), tok = p.get("token");
+  if (h && tok) {
+    return {
+      host: h,
+      port: p.get("port") || "4173",
+      token: tok,
+      tls: p.get("tls") === "1",
+      path: p.get("path") || "",
+    };
+  }
+  try {
+    const raw = localStorage.getItem(CREDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
   return null;
+}
+
+function persistCreds(c) {
+  try { localStorage.setItem(CREDS_KEY, JSON.stringify(c)); } catch {}
+}
+
+function clearCreds() {
+  try { localStorage.removeItem(CREDS_KEY); } catch {}
+}
+
+// Parse synapse:// / wss:// pairing links (mirrors crates/app/src/net.rs).
+function parsePairLink(link) {
+  const raw = link.trim();
+  if (!raw) return null;
+  let body = raw
+    .replace(/^synapse:\/\//, "")
+    .replace(/^synapse:/, "")
+    .replace(/^wss:\/\//, "")
+    .replace(/^ws:\/\//, "");
+  const qIdx = body.indexOf("?");
+  const authPath = qIdx >= 0 ? body.slice(0, qIdx) : body;
+  const query = qIdx >= 0 ? body.slice(qIdx + 1) : "";
+  const params = new URLSearchParams(query);
+  const token = params.get("token") || "";
+  const tls = params.get("tls") === "1" || params.get("tls") === "true";
+  if (!token) return null;
+
+  const slash = authPath.indexOf("/");
+  if (slash >= 0) {
+    const authority = authPath.slice(0, slash);
+    const path = authPath.slice(slash);
+    const { host, port } = splitHostPort(authority, tls);
+    if (!host) return null;
+    return { host, port, token, tls, path };
+  }
+  const { host, port } = splitHostPort(authPath, tls);
+  if (!host) return null;
+  return { host, port, token, tls, path: "" };
+}
+
+function splitHostPort(authority, tls) {
+  const i = authority.lastIndexOf(":");
+  if (i > 0) {
+    const port = authority.slice(i + 1);
+    if (/^\d+$/.test(port)) {
+      return { host: authority.slice(0, i), port };
+    }
+  }
+  return { host: authority, port: tls ? "443" : "80" };
+}
+
+function showConnectOverlay() {
+  $("connectOverlay").classList.remove("hidden");
+}
+function hideConnectOverlay() {
+  $("connectOverlay").classList.add("hidden");
+}
+
+function applyCreds(c) {
+  window.__SYNAPSE__ = c;
+  persistCreds(c);
+  hideConnectOverlay();
+  state.url = buildUrl(c);
+  state.backoff = 1000;
+  doConnect(true);
+}
+
+function pairFromForm() {
+  const link = ($("pairLink").value || "").trim();
+  if (link) {
+    const c = parsePairLink(link);
+    if (!c) { toast("Invalid pairing link"); return; }
+    applyCreds(c);
+    return;
+  }
+  const host = ($("pairHost").value || "").trim();
+  const token = ($("pairToken").value || "").trim();
+  if (!host || !token) { toast("Host and token required"); return; }
+  applyCreds({
+    host,
+    port: ($("pairPort").value || "4173").trim(),
+    token,
+    tls: $("pairTls").checked,
+    path: "",
+  });
 }
 
 function buildUrl(c) {
@@ -61,7 +168,9 @@ function buildUrl(c) {
 // =================== connection ===================
 function connect() {
   const c = creds();
-  if (!c) { toast("No pairing credentials"); return; }
+  if (!c) { showConnectOverlay(); return; }
+  hideConnectOverlay();
+  window.__SYNAPSE__ = c;
   state.url = buildUrl(c);
   doConnect(true);
 }
@@ -72,7 +181,10 @@ function doConnect(first) {
   state.ws.onopen = () => {
     state.connected = true;
     state.backoff = 1000;
+    if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
+    hideConnectOverlay();
     $("reconnect").classList.remove("show");
+    showSessions();
     // prime session list
     send({ op: "list" });
     if (first) {
@@ -88,8 +200,8 @@ function doConnect(first) {
   state.ws.onclose = () => {
     state.connected = false;
     if (first) {
-      // pairing failure — surface, no retry loop (native will re-inject on retry)
-      toast("Could not connect");
+      toast("Could not connect — check link and server");
+      showConnectOverlay();
     } else {
       $("reconnect").classList.add("show");
       scheduleReconnect(false);
@@ -124,6 +236,7 @@ function handle(v) {
       break;
     case "sessions": setSessions(v.sessions || []); break;
     case "created":
+      state.creating = false;
       setSessions(state.sessions); // list update follows via event
       select(v.session.id);
       // The pick has been consumed by create; clear it so currentCwd()/
@@ -135,7 +248,12 @@ function handle(v) {
       }
       break;
     case "sessions": break;
+    case "cwds":
+      state.cwds = v.cwds || [];
+      if (state.view === "workspaces") renderWorkspaces();
+      break;
     case "history":
+      state.loadingHistory = false;
       // Ignore a stale response for a session we've navigated away from: a slow
       // history (large transcript, mobile link) can land after the user switched,
       // painting the wrong session's messages under the new one ("session错乱").
@@ -145,6 +263,8 @@ function handle(v) {
       break;
     case "event": handleEvent(v.event); break;
     case "error":
+      state.creating = false;
+      renderSessions();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -167,10 +287,10 @@ function handleEvent(evt) {
     const i = state.sessions.findIndex(x => x.id === evt.sessionId);
     if (i >= 0) state.sessions.splice(i, 1);
     if (evt.sessionId === state.activeId) {
-      state.activeId = ""; clearMessages(); titleName.textContent = "Synapse"; setBusy(false);
+      state.activeId = ""; clearMessages(); titleName.textContent = workspaceName(); setBusy(false);
+      showSessions();
     }
     renderSessions();
-    if (!state.activeId && state.sessions.length) select(state.sessions[0].id);
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
@@ -231,6 +351,7 @@ function startTurn() {
     ticks: 0,             // live elapsed: counts seconds via pulse timer
     firstTs: 0, lastTs: 0,// frame timestamps (ms) — elapsed source for history
     appended: false,
+    activityCount: 0,
   };
   // don't add to DOM until there's content (avoid empty box)
 }
@@ -302,58 +423,300 @@ function splitTurn(tn) {
   return { replyText: "", workItems: tn.order };
 }
 
-// Render the active turn. `settled` collapses the work region into a
-// "Worked for Xs ›" disclosure (Synara style); while running it shows live.
+// Render the active turn. While running, work shows in a fixed-height activity
+// feed that scrolls upward as new steps arrive; when settled it collapses to one line.
 function renderTurn(settled) {
   const tn = state.turn;
   if (!tn) return;
   const { replyText, workItems } = splitTurn(tn);
-  const hasWork = workItems.length > 0;
+  const hasWork = workItems.length > 0 || (state.busy && !settled);
 
-  // ----- work region -----
   tn.workWrap.innerHTML = "";
   if (hasWork) {
     if (settled) {
-      // collapsed: one "Worked for Xs ›" row + hairline; expand to reveal items
-      const wrap = document.createElement("div"); wrap.className = "worked";
-      const trig = document.createElement("button"); trig.className = "worked-trig";
-      // elapsed: live timer (ticks) if present, else frame-timestamp span (history)
       const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
       const secs = tn.ticks > 0 ? tn.ticks : tsSecs;
-      const label = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
-      trig.innerHTML = `<span>${label}</span><span class="chev">▸</span>`;
-      const panel = document.createElement("div"); panel.className = "worked-panel";
-      buildWorkItems(panel, workItems, tn);
-      trig.addEventListener("click", () => {
-        wrap.classList.toggle("open");
-      });
-      wrap.appendChild(trig); wrap.appendChild(panel);
-      tn.workWrap.appendChild(wrap);
-      const hr = document.createElement("div"); hr.className = "hr";
-      tn.workWrap.appendChild(hr);
+      const summary = summarizeWork(workItems, tn, secs);
+      const line = statusLine(summary, () => openWorkSheet(workItems, tn, secs), "work-summary has-action");
+      tn.workWrap.appendChild(line);
     } else {
-      // live: show work items inline (thinking card + running tool cards)
-      buildWorkItems(tn.workWrap, workItems, tn);
+      const feed = document.createElement("div");
+      feed.className = "activity-feed";
+      const scroll = document.createElement("div");
+      scroll.className = "activity-scroll";
+      feed.appendChild(scroll);
+      tn.workWrap.appendChild(feed);
+      tn.activityFeed = feed;
+      renderActivityFeed(scroll, workItems, tn);
+      scrollActivityFeed(feed, scroll);
     }
   }
 
-  // ----- reply region -----
   tn.replyWrap.innerHTML = "";
   if (replyText) tn.replyWrap.appendChild(mdEl(replyText));
 }
 
-function buildWorkItems(container, items, tn) {
+function scrollActivityFeed(feed, scroll) {
+  requestAnimationFrame(() => {
+    const overflow = scroll.scrollHeight - feed.clientHeight;
+    if (overflow > 0) scroll.style.transform = `translateY(-${overflow}px)`;
+    else scroll.style.transform = "";
+  });
+}
+
+function renderActivityFeed(scroll, items, tn) {
+  const prev = tn.activityCount || 0;
+  scroll.innerHTML = "";
+  const lastIdx = items.length - 1;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (i === lastIdx && state.busy && isItemActive(it, tn)) continue;
+    appendActivityLine(scroll, it, tn, i, items);
+  }
+  const now = activeItemLine(items, tn);
+  if (now) {
+    const cls = "status-now has-action" + (now.running ? " running" : "");
+    scroll.appendChild(statusLine(now.label, now.onClick, cls));
+  }
+  const lines = scroll.querySelectorAll(".status-line");
+  for (let i = prev; i < lines.length; i++) lines[i].classList.add("line-enter");
+  tn.activityCount = lines.length;
+}
+
+function isItemActive(it, tn) {
+  if (it.kind === "thinking") return isThinkingActive(tn, it);
+  if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    return t && t.status === "running";
+  }
+  return false;
+}
+
+function appendActivityLine(scroll, it, tn, idx, items) {
+  if (it.kind === "thinking") {
+    const secs = thinkingSecsForItem(tn, it, idx, items);
+    scroll.appendChild(statusLine(
+      secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought",
+      () => openThinkingSheet(it.text, secs),
+      "has-action"
+    ));
+  } else if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    if (!t) return;
+    scroll.appendChild(statusLine(toolStatusLabel(t), () => openToolSheet(t), "has-action"));
+  }
+}
+
+function thinkingSecsForItem(tn, item, idx, items) {
+  if (idx < items.length - 1) {
+    const next = items[idx + 1];
+    if (next && next.kind === "tool") return Math.max(1, thinkingSecs(tn));
+  }
+  const secs = thinkingSecs(tn);
+  return secs > 0 ? secs : 1;
+}
+
+function activeItemLine(items, tn) {
+  if (!state.busy) return null;
+  const last = items[items.length - 1];
+  if (last && last.kind === "text" && last.text) return null;
+  if (!last) return { label: "Planning next moves", running: true };
+  if (last.kind === "thinking" && isThinkingActive(tn, last)) {
+    const secs = thinkingSecs(tn);
+    return {
+      label: secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thinking…",
+      running: true,
+      onClick: () => openThinkingSheet(last.text, secs),
+    };
+  }
+  if (last.kind === "tool") {
+    const t = tn.tools.get(last.id);
+    if (t && t.status === "running") {
+      return { label: currentToolAction(t), running: true, onClick: () => openToolSheet(t) };
+    }
+  }
+  return { label: "Planning next moves", running: true };
+}
+
+function currentToolAction(t) {
+  const a = t.args || {};
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  switch (t.name) {
+    case "Edit": case "Write": case "MultiEdit": case "NotebookEdit":
+      return file ? `Editing ${file}` : "Editing";
+    case "Read": case "LS":
+      return file ? `Reading ${file}` : "Reading";
+    case "Grep": return `Searching ${str(a.pattern)}`;
+    case "Glob": return `Searching ${str(a.pattern)}`;
+    case "Bash": return "Running command";
+    case "Task": return "Running task";
+    case "WebSearch": return `Searching ${firstLine(str(a.query))}`;
+    case "WebFetch": return `Fetching ${hostOf(a.url)}`;
+    case "TodoWrite": return "Updating plan";
+    default: return toolMeta(t).title;
+  }
+}
+
+function statusLine(label, onClick, extraClass) {
+  const btn = document.createElement("button");
+  btn.className = "status-line" + (extraClass ? " " + extraClass : "");
+  if (onClick) {
+    btn.classList.add("has-action");
+    btn.innerHTML = `${escapeHtml(label)}<span class="chev"> ›</span>`;
+    btn.addEventListener("click", onClick);
+  } else {
+    btn.textContent = label;
+  }
+  return btn;
+}
+
+function thinkingSecs(tn) {
+  const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
+  return tn.ticks > 0 ? tn.ticks : tsSecs;
+}
+
+function isThinkingActive(tn, thinkingItem) {
+  const idx = tn.order.indexOf(thinkingItem);
+  const after = tn.order.slice(idx + 1);
+  return after.length === 0 || after.every(x => x.kind === "thinking");
+}
+
+function thinkingLabel(secs, running) {
+  if (running) return "Thinking…";
+  return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+}
+
+function toolStatusLabel(t) {
+  const a = t.args || {};
+  const meta = toolMeta(t);
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  if (t.status === "running") return currentToolAction(t);
+  switch (t.name) {
+    case "Edit": {
+      const d = lineDiff(str(a.old_string), str(a.new_string));
+      return `Edited ${file} ${diffStat(d)}`;
+    }
+    case "MultiEdit": {
+      const edits = Array.isArray(a.edits) ? a.edits : [];
+      let ad = 0, de = 0;
+      for (const e of edits) { const d = lineDiff(str(e.old_string), str(e.new_string)); ad += d.adds; de += d.dels; }
+      return `Edited ${file} +${ad} −${de}`;
+    }
+    case "Write": {
+      const n = str(a.content).split("\n").length;
+      return `Edited ${file} +${n}`;
+    }
+    case "NotebookEdit":
+      return `Edited ${file}`;
+    case "Read": case "LS":
+      return file ? `Read ${file}` : "Explored files";
+    case "Grep":
+      return `Grepped ${str(a.pattern)}${a.path ? " in " + basename(a.path) : ""}`;
+    case "Glob":
+      return `Searched ${str(a.pattern)}`;
+    case "Bash":
+      return `Ran ${firstLine(str(a.command))}`;
+    case "Task":
+      return `Completed task ${meta.sub || meta.title}`;
+    case "WebSearch":
+      return `Searched ${firstLine(str(a.query))}`;
+    case "WebFetch":
+      return `Fetched ${hostOf(a.url)}`;
+    case "TodoWrite":
+      return "Updated plan";
+    case "AskUserQuestion":
+      return `Asked ${firstLine(askText(a))}`;
+    case "ExitPlanMode": case "exit_plan_mode":
+      return "Proposed plan";
+    default:
+      return `Used ${meta.title.toLowerCase()}${meta.sub ? " · " + meta.sub : ""}`;
+  }
+}
+
+function summarizeWork(items, tn, secs) {
+  let files = 0, searches = 0, edits = 0, other = 0, hasThinking = false;
   for (const it of items) {
+    if (it.kind === "thinking") { hasThinking = true; continue; }
+    if (it.kind !== "tool") continue;
+    const t = tn.tools.get(it.id);
+    if (!t) continue;
+    if (["Read", "LS"].includes(t.name)) files++;
+    else if (["Grep", "Glob", "WebSearch"].includes(t.name)) searches++;
+    else if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(t.name)) edits++;
+    else other++;
+  }
+  const parts = [];
+  if (files) parts.push(`${files} file${files > 1 ? "s" : ""}`);
+  if (searches) parts.push(`${searches} search${searches > 1 ? "es" : ""}`);
+  if (edits) parts.push(`${edits} edit${edits > 1 ? "s" : ""}`);
+  if (other) parts.push(`${other} other tool${other > 1 ? "s" : ""}`);
+  if (parts.length) return `Explored ${parts.join(", ")}`;
+  if (hasThinking) return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+  return secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+}
+
+// Bottom sheet for expanded thinking / tool / work details
+function openSheet(title, content) {
+  $("sheetTitle").textContent = title;
+  const body = $("sheetBody");
+  body.innerHTML = "";
+  if (typeof content === "string") {
+    const pre = document.createElement("div");
+    pre.className = "sheet-thinking";
+    pre.textContent = content;
+    body.appendChild(pre);
+  } else {
+    body.appendChild(content);
+  }
+  $("sheetMask").classList.add("show");
+  $("bottomSheet").classList.add("show");
+  $("bottomSheet").style.transform = "";
+}
+function closeSheet() {
+  $("sheetMask").classList.remove("show");
+  $("bottomSheet").classList.remove("show");
+  $("bottomSheet").classList.remove("dragging");
+  $("bottomSheet").style.transform = "";
+}
+function openThinkingSheet(text, secs) {
+  openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", text || "No details.");
+}
+function openToolSheet(t) {
+  const meta = toolMeta(t);
+  const wrap = document.createElement("div");
+  const card = toolCard(t);
+  card.classList.add("open");
+  wrap.appendChild(card);
+  openSheet(meta.title + (meta.sub ? ` · ${meta.sub}` : ""), wrap);
+}
+function openWorkSheet(items, tn, secs) {
+  const wrap = document.createElement("div");
+  for (const it of items) {
+    const block = document.createElement("div");
+    block.className = "sheet-item";
+    const lbl = document.createElement("div");
+    lbl.className = "sheet-item-label";
     if (it.kind === "thinking") {
-      container.appendChild(cardEl("thinking", "✦", "Thinking", null, it.text));
-    } else if (it.kind === "text") {
-      container.appendChild(mdEl(it.text));   // earlier (non-trailing) reply text
+      lbl.textContent = thinkingLabel(secs, false);
+      const pre = document.createElement("div");
+      pre.className = "sheet-thinking";
+      pre.textContent = it.text;
+      block.appendChild(lbl); block.appendChild(pre);
     } else if (it.kind === "tool") {
       const t = tn.tools.get(it.id);
       if (!t) continue;
-      container.appendChild(toolCard(t));
+      lbl.textContent = toolStatusLabel(t);
+      block.appendChild(lbl);
+      block.appendChild(toolCard(t));
+    } else if (it.kind === "text") {
+      lbl.textContent = "Draft";
+      block.appendChild(lbl);
+      block.appendChild(mdEl(it.text));
     }
+    wrap.appendChild(block);
   }
+  const title = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+  openSheet(title, wrap);
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -638,7 +1001,6 @@ function showPermission(evt) {
   body.appendChild(card); permEl.appendChild(body);
   messagesEl.appendChild(permEl);
   emptyEl.classList.add("hidden");
-  if (pulseEl) { pulseEl.remove(); pulseEl = null; }  // await a human, not "working"
   ensurePinned();
 }
 function removePermission() { if (permEl) { permEl.remove(); permEl = null; } }
@@ -659,7 +1021,7 @@ function currentMode() {
   const s = state.sessions.find(x => x.id === state.activeId);
   return (s ? s.permission_mode : state.pendingMode) || "default";
 }
-function syncPermLabel() { const el = $("permLabel"); if (el) el.textContent = permLabelFor(currentMode()); }
+function syncPermLabel() { /* permission mode shown in attach menu */ }
 function chooseMode(mode) {
   closeMenus();
   if (state.activeId) {
@@ -671,21 +1033,40 @@ function chooseMode(mode) {
   }
   syncPermLabel();
 }
-function initPermPill() {
-  const controls = $("composerControls"); if (!controls || $("permCtl")) return;
-  const pill = document.createElement("span");
-  pill.className = "ctl"; pill.id = "permCtl";
-  pill.innerHTML = `<span class="ico">⚑</span><span id="permLabel">Ask</span>`;
-  controls.insertBefore(pill, controls.querySelector(".spacer"));
+function initAttachMenu() {
+  const btn = $("attachBtn");
+  if (!btn) return;
   const menu = document.createElement("div");
   menu.className = "model-menu"; menu.id = "permMenu";
   $("composer").appendChild(menu);
-  pill.addEventListener("click", (e) => {
+  btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleMenu("permMenu", () => openMenu("permMenu",
-      PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, ""));
+    toggleMenu("attachMenu", openAttachMenu);
   });
-  syncPermLabel();
+}
+function openAttachMenu() {
+  closeMenus();
+  const menu = $("attachMenu");
+  menu.innerHTML = "";
+  const addRow = (label, onClick) => {
+    const row = document.createElement("div");
+    row.className = "model-item";
+    row.innerHTML = `<span>${escapeHtml(label)}</span>`;
+    row.addEventListener("click", (e) => { e.stopPropagation(); closeMenus(); onClick(); });
+    menu.appendChild(row);
+  };
+  addRow(`Project · ${basename(currentCwd()) || "Local"}`, () => openLocalMenu());
+  addRow(`Permissions · ${permLabelFor(currentMode())}`, () => {
+    openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
+  });
+  addRow("Change server…", () => {
+    if (state.ws) { state.ws.close(); state.ws = null; }
+    state.connected = false;
+    clearCreds();
+    window.__SYNAPSE__ = null;
+    showConnectOverlay();
+  });
+  menu.classList.add("show");
 }
 
 function ingestResult(evt) {
@@ -932,7 +1313,19 @@ function clearMessages() {
   messagesEl.innerHTML = "";
   state.blocks = [];
   permEl = null;
+  state.loadingHistory = false;
   emptyEl.classList.remove("hidden");
+}
+
+function showHistorySkeleton() {
+  messagesEl.innerHTML = "";
+  state.blocks = [];
+  for (let i = 0; i < 3; i++) {
+    const sk = document.createElement("div");
+    sk.className = "msg-skeleton";
+    messagesEl.appendChild(sk);
+  }
+  emptyEl.classList.add("hidden");
 }
 
 // =================== smart scroll ===================
@@ -973,39 +1366,34 @@ $("newPill").addEventListener("click", () => {
 function setBusy(b) {
   state.busy = b;
   sendBtn.classList.toggle("busy", b);
-  sendBtn.textContent = b ? "■" : "↑";
-  dot.classList.toggle("busy", b);
   updatePulse();
+  updateSend();
 }
-// The typing indicator shows while the turn is busy and working — before the
-// first token, while thinking, and while any tool runs. It hides only once the
-// FINAL answer is streaming (text present, no tool still running), where the
-// streaming text is itself the activity. It sits at the end of the list.
-let pulseEl = null;
+// Activity indicator: keep the turn's activity feed visible while working.
 let tickTimer = null;
 function updatePulse() {
-  // A mid-turn preamble ("Let me read the README…") followed by running tools must
-  // keep pulsing, so a running tool always forces the pulse on despite that text.
   const tn = state.turn;
   const toolRunning = tn && [...tn.tools.values()].some(t => t.status === "running");
   const last = tn && tn.order[tn.order.length - 1];
   const hasReply = !!(last && last.kind === "text" && last.text);
   const show = state.busy && (toolRunning || !hasReply);
-  if (show) {
-    if (!pulseEl) {
-      pulseEl = document.createElement("div");
-      pulseEl.className = "msg assistant pulse-row";
-      pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
-    }
-    messagesEl.appendChild(pulseEl); // move to end (after work items)
-    emptyEl.classList.add("hidden");
+  if (show && tn) {
+    ensureTurnInDom();
+    renderTurn(false);
     ensurePinned();
-  } else if (pulseEl) {
-    pulseEl.remove(); pulseEl = null;
   }
-  // elapsed counter: tick once a second while busy, feeding "Worked for Xs"
   if (state.busy && !tickTimer) {
-    tickTimer = setInterval(() => { if (state.turn) state.turn.ticks++; }, 1000);
+    tickTimer = setInterval(() => {
+      if (state.turn) {
+        state.turn.ticks++;
+        renderTurn(false);
+        if (state.turn.activityFeed) {
+          const scroll = state.turn.activityFeed.querySelector(".activity-scroll");
+          if (scroll) scrollActivityFeed(state.turn.activityFeed, scroll);
+        }
+        ensurePinned();
+      }
+    }, 1000);
   } else if (!state.busy && tickTimer) {
     clearInterval(tickTimer); tickTimer = null;
   }
@@ -1021,10 +1409,9 @@ function setSessions(list) {
   // to auto-select a live session instead of sitting on "new session" forever.
   if (state.activeId && !state.sessions.some((s) => s.id === state.activeId)) {
     state.activeId = "";
+    if (state.view === "chat") showSessions();
   }
-  if (!state.activeId && state.sessions.length) {
-    select(state.sessions[0].id);
-  }
+  updateTopbar();
 }
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
@@ -1039,7 +1426,7 @@ function setSessionState(id, st) {
   if (!ses || ses.state === st) return;
   ses.state = st;
   renderSessions();
-  if (id === state.activeId) dot.className = st === "busy" ? "busy" : (st === "error" ? "error" : "");
+  if (id === state.activeId && state.view === "chat") updateTopbar();
 }
 // Session titles come from the transcript's first user line, which is often
 // command/hook boilerplate (/goal stop-hooks, continuation summaries, local-
@@ -1067,82 +1454,391 @@ function closeRowMenu() { const m = $("rowMenu"); if (m) m.remove(); }
 function rowMenu(s, anchor) {
   closeRowMenu();
   const m = document.createElement("div"); m.className = "row-menu"; m.id = "rowMenu";
-  const rename = document.createElement("div"); rename.className = "row-mi"; rename.textContent = "Rename";
-  rename.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  const add = (label, cls, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi" + (cls ? " " + cls : "");
+    el.textContent = label;
+    el.addEventListener("click", (e) => { e.stopPropagation(); closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", "", () => {
     const n = prompt("Rename session", cleanTitle(s.name) || "");
     if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
   });
-  const del = document.createElement("div"); del.className = "row-mi danger"; del.textContent = "Delete";
-  del.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  add("Copy path", "", () => { copyText(s.cwd || ""); toast("Path copied"); haptic("light"); });
+  add(s.pinned ? "Unpin" : "Pin", "", () => {
+    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
+    haptic("medium");
+  });
+  add(s.archived ? "Unarchive" : "Archive", "", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+    haptic("medium");
+  });
+  add("Delete", "danger", () => {
     if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
   });
-  m.appendChild(rename); m.appendChild(del);
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${Math.max(8, Math.min(r.right - 150, window.innerWidth - 158))}px`;
 }
+
+function showRowContext(s) {
+  closeRowMenu();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const add = (label, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi";
+    el.textContent = label;
+    el.addEventListener("click", () => { closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", () => {
+    const n = prompt("Rename session", cleanTitle(s.name) || "");
+    if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
+  });
+  add("Copy path", () => { copyText(s.cwd || ""); toast("Path copied"); });
+  add(s.pinned ? "Unpin" : "Pin", () => send({ op: "pin", sessionId: s.id, pinned: !s.pinned }));
+  add(s.archived ? "Unarchive" : "Archive", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+  });
+  add("Delete", () => {
+    if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
+  });
+  document.body.appendChild(m);
+}
 document.addEventListener("click", closeRowMenu);
 
-function renderSessions() {
-  const q = $("search").value.toLowerCase();
-  const list = $("sessionList");
-  list.innerHTML = "";
-  // Group by project (cwd) — a cross-project list mixing synapse/dcc/llm-proxy in
-  // random order was the "散乱" pile. Groups are ordered by their most-recent
-  // session; rows within a group are most-recent-first.
-  const f = state.sessions
-    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q));
-  const groups = new Map();
-  for (const s of f) {
-    const proj = (s.cwd || "").split("/").filter(Boolean).pop() || "other";
-    if (!groups.has(proj)) groups.set(proj, []);
-    groups.get(proj).push(s);
-  }
-  const ordered = [...groups.entries()]
-    .map(([proj, items]) => {
-      items.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
-      return { proj, items, recent: items[0] ? (items[0].started_at || 0) : 0 };
-    })
-    .sort((a, b) => b.recent - a.recent);
-  for (const g of ordered) {
-    const collapsed = collapsedGroups.has(g.proj);
-    const h = document.createElement("div");
-    h.className = "s-group" + (collapsed ? " collapsed" : "");
-    h.innerHTML = `<span class="chev">▸</span><span class="s-group-name">${escapeHtml(g.proj)}</span><span class="s-group-n">${g.items.length}</span>`;
-    const body = document.createElement("div");
-    body.className = "s-group-items";
-    for (const s of g.items) {
-      const it = document.createElement("div");
-      it.className = "s-item" + (s.id === state.activeId ? " active" : "");
-      // Single tight line: [status only if busy/error] title …… time.
-      // Idle is the default state, so it gets NO dot (a dot on every row was just noise).
-      const st = s.state === "busy" ? `<span class="st busy"></span>`
-               : s.state === "error" ? `<span class="st error"></span>` : "";
-      it.innerHTML =
-        st +
-        `<span class="label">${escapeHtml(cleanTitle(s.name))}</span>` +
-        `<span class="when">${escapeHtml(relTime(s.started_at || 0))}</span>` +
-        `<button class="s-more" aria-label="Session actions">⋯</button>`;
-      it.addEventListener("click", () => select(s.id));
-      it.querySelector(".s-more").addEventListener("click", (e) => { e.stopPropagation(); rowMenu(s, e.currentTarget); });
-      body.appendChild(it);
-    }
-    // Header toggles its group. Track folded projects in a Set so a re-render
-    // (WS update, search) doesn't pop everything back open.
-    h.addEventListener("click", () => {
-      const nowCollapsed = h.classList.toggle("collapsed");
-      if (nowCollapsed) collapsedGroups.add(g.proj); else collapsedGroups.delete(g.proj);
-    });
-    list.appendChild(h);
-    list.appendChild(body);
+function workspaceName() {
+  const sorted = [...state.sessions].sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+  const cwd = sorted[0] && sorted[0].cwd;
+  return cwd ? basename(cwd) : "Synapse";
+}
+
+function dayGroup(ms) {
+  if (!ms) return "Earlier";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterday = today - 86400000;
+  const d = new Date(ms);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (day >= today) return "Today";
+  if (day >= yesterday) return "Yesterday";
+  return "Earlier";
+}
+
+function diffSubtitle(s) {
+  const a = s.diff_adds || 0;
+  const d = s.diff_dels || 0;
+  if (!a && !d) return "";
+  let html = "";
+  if (a) html += `<span class="sess-diff">+${a}</span>`;
+  if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${d}</span>`;
+  return html;
+}
+
+function sessionSubtitle(s) {
+  if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
+  if (s.state === "error") return { text: "Check failed", cls: "error", html: "" };
+  const diff = diffSubtitle(s);
+  const t = s.started_at || 0;
+  const time = t ? relTime(t) : "";
+  if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
+  if (diff) return { text: "", cls: "", html: diff };
+  return t ? { text: time, cls: "", html: "" } : { text: "", cls: "", html: "" };
+}
+
+let navFromPop = false;
+
+function exitSelectMode() {
+  state.selectMode = false;
+  state.selectedIds.clear();
+  document.body.classList.remove("select-mode");
+  $("sessionToolbar").classList.add("hidden");
+  $("selectBtn").classList.remove("active");
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const n = state.selectedIds.size;
+  $("selectCount").textContent = n ? `${n} selected` : "Select sessions";
+  const btn = $("selectArchive");
+  btn.textContent = state.showArchived ? "Unarchive" : "Archive";
+  btn.disabled = n === 0;
+}
+
+function showSessions() {
+  state.view = "sessions";
+  document.body.classList.add("mode-sessions");
+  document.body.classList.remove("mode-chat", "mode-workspaces");
+  document.body.classList.toggle("filter-cwd", !!state.filterCwd);
+  closeSearch();
+  updateTopbar();
+  renderSessions();
+}
+
+function showWorkspaces(pushHistory) {
+  state.view = "workspaces";
+  document.body.classList.remove("mode-sessions", "mode-chat");
+  document.body.classList.add("mode-workspaces");
+  closeSearch();
+  exitSelectMode();
+  updateTopbar();
+  renderWorkspaces();
+  if (pushHistory !== false && !navFromPop) {
+    history.pushState({ synapse: "workspaces" }, "", location.href);
   }
 }
 
-// Project groups the user has folded in the drawer (survives re-renders).
-const collapsedGroups = new Set();
+function showChat(pushHistory) {
+  state.view = "chat";
+  document.body.classList.remove("mode-sessions", "mode-workspaces");
+  document.body.classList.add("mode-chat");
+  closeSearch();
+  exitSelectMode();
+  updateTopbar();
+  if (pushHistory !== false && !navFromPop) {
+    history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
+  }
+  requestAnimationFrame(() => { if (inputEl) inputEl.focus(); });
+}
+
+function closeSearch() {
+  const wrap = $("searchWrap");
+  if (!wrap.classList.contains("hidden")) {
+    wrap.classList.add("hidden");
+    $("search").value = "";
+    $("searchBtn").classList.remove("active");
+  }
+}
+
+function updateTopbar() {
+  if (state.view === "workspaces") {
+    titleName.textContent = "Workspaces";
+  } else if (state.view === "sessions") {
+    titleName.textContent = state.filterCwd ? basename(state.filterCwd) : workspaceName();
+  } else {
+    const s = state.sessions.find(x => x.id === state.activeId);
+    titleName.textContent = s ? cleanTitle(s.name) : "Chat";
+  }
+}
+
+function buildWorkspaces() {
+  const map = new Map();
+  for (const p of state.cwds) map.set(p, { cwd: p, count: 0, lastActive: 0, busy: 0 });
+  for (const s of state.sessions) {
+    if (!map.has(s.cwd)) map.set(s.cwd, { cwd: s.cwd, count: 0, lastActive: 0, busy: 0 });
+    const w = map.get(s.cwd);
+    if (!s.archived) w.count++;
+    if (s.state === "busy") w.busy++;
+    w.lastActive = Math.max(w.lastActive, s.started_at || 0);
+  }
+  return [...map.values()].sort((a, b) => b.lastActive - a.lastActive);
+}
+
+function renderWorkspaces() {
+  const list = $("workspaceList");
+  list.innerHTML = "";
+  const items = buildWorkspaces();
+  if (!items.length) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = "No projects found — add repos in Claude Code";
+    list.appendChild(hint);
+    return;
+  }
+  for (const w of items) {
+    const row = document.createElement("div");
+    row.className = "ws-row";
+    const meta = w.busy
+      ? `${w.count} session${w.count !== 1 ? "s" : ""} · Working`
+      : `${w.count} session${w.count !== 1 ? "s" : ""}`;
+    row.innerHTML =
+      `<div class="ws-icon">⎇</div>` +
+      `<div class="ws-body"><div class="ws-name">${escapeHtml(basename(w.cwd))}</div>` +
+      `<div class="ws-meta">${escapeHtml(meta)}</div></div>` +
+      `<button type="button" class="ws-new" aria-label="New session in ${escapeHtml(basename(w.cwd))}">+</button>`;
+    row.title = w.cwd;
+    row.querySelector(".ws-body").addEventListener("click", () => {
+      state.filterCwd = w.cwd;
+      state.pendingCwd = w.cwd;
+      showSessions();
+      haptic("light");
+    });
+    row.querySelector(".ws-new").addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.pendingCwd = w.cwd;
+      state.filterCwd = w.cwd;
+      newSession();
+      haptic("light");
+    });
+    list.appendChild(row);
+  }
+}
+
+function bindSwipeRow(wrap, s) {
+  const row = wrap.querySelector(".sess-row");
+  let startX = 0, dx = 0, dragging = false;
+  row.addEventListener("touchstart", (e) => {
+    if (state.selectMode) return;
+    startX = e.touches[0].clientX;
+    dragging = true;
+    document.querySelectorAll(".sess-swipe-wrap.open").forEach(w => {
+      if (w !== wrap) w.classList.remove("open");
+    });
+  }, { passive: true });
+  row.addEventListener("touchmove", (e) => {
+    if (!dragging) return;
+    dx = e.touches[0].clientX - startX;
+    if (dx < 0 && dx > -140) row.style.transform = `translateX(${dx}px)`;
+  }, { passive: true });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    row.style.transform = "";
+    if (dx < -56) { wrap.classList.add("open"); haptic("light"); }
+    else wrap.classList.remove("open");
+    dx = 0;
+  };
+  row.addEventListener("touchend", end);
+  row.addEventListener("touchcancel", end);
+  wrap.querySelector(".act-pin").addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
+    wrap.classList.remove("open");
+    haptic("medium");
+  });
+  wrap.querySelector(".act-archive").addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ op: "archive", sessionId: s.id });
+    wrap.classList.remove("open");
+    haptic("medium");
+  });
+}
+
+function bindLongPress(row, s) {
+  let timer = null;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  row.addEventListener("touchstart", () => {
+    if (state.selectMode) return;
+    timer = setTimeout(() => { haptic("medium"); showRowContext(s); }, 480);
+  }, { passive: true });
+  row.addEventListener("touchend", clear);
+  row.addEventListener("touchmove", clear);
+  row.addEventListener("touchcancel", clear);
+}
+
+function renderSessions() {
+  const q = ($("search").value || "").toLowerCase();
+  const list = $("sessionList");
+  list.innerHTML = "";
+  const archivedAny = state.sessions.some(s => s.archived);
+  $("archivedToggle").classList.toggle("hidden", !archivedAny);
+  $("archivedToggle").textContent = state.showArchived ? "Hide archived" : "Show archived";
+
+  const f = state.sessions
+    .filter(s => state.showArchived ? s.archived : !s.archived)
+    .filter(s => !state.filterCwd || s.cwd === state.filterCwd)
+    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q))
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+      return (b.started_at || 0) - (a.started_at || 0);
+    });
+
+  if (!f.length && !state.creating) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    const msg = state.filterCwd
+      ? `No sessions in ${basename(state.filterCwd)}`
+      : (q ? "No matching sessions" : "No sessions yet");
+    hint.innerHTML = q || state.filterCwd
+      ? msg
+      : `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
+    if (!q && !state.filterCwd) hint.querySelector(".empty-cta").addEventListener("click", newSession);
+    list.appendChild(hint);
+    return;
+  }
+
+  if (state.creating) {
+    const row = document.createElement("div");
+    row.className = "sess-row creating";
+    row.innerHTML =
+      `<div class="sess-icon">…</div>` +
+      `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
+      `<div class="sess-sub working">Working</div></div>`;
+    const head = document.createElement("div");
+    head.className = "s-time"; head.textContent = "Today";
+    list.appendChild(head);
+    list.appendChild(row);
+  }
+
+  const groups = new Map();
+  const order = ["Today", "Yesterday", "Earlier"];
+  for (const s of f) {
+    const g = dayGroup(s.started_at || 0);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(s);
+  }
+
+  for (const gName of order) {
+    const items = groups.get(gName);
+    if (!items || !items.length) continue;
+    const head = document.createElement("div");
+    head.className = "s-time";
+    head.textContent = gName;
+    list.appendChild(head);
+    for (const s of items) {
+      const wrap = document.createElement("div");
+      wrap.className = "sess-swipe-wrap";
+      wrap.innerHTML =
+        `<div class="sess-actions">` +
+          `<button type="button" class="act-pin">${s.pinned ? "Unpin" : "Pin"}</button>` +
+          `<button type="button" class="act-archive">Archive</button>` +
+        `</div>`;
+      const row = document.createElement("div");
+      row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
+      const sub = sessionSubtitle(s);
+      const subHtml = sub.html
+        ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
+        : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
+      const icon = s.pinned ? "★" : (s.state === "busy" ? "◐" : "+");
+      row.innerHTML =
+        `<div class="sess-check" aria-hidden="true"></div>` +
+        `<div class="sess-icon">${icon}</div>` +
+        `<div class="sess-body">` +
+          `<div class="sess-title">${escapeHtml(cleanTitle(s.name))}</div>` +
+          subHtml +
+        `</div>` +
+        `<button class="sess-more" aria-label="Session actions">⋯</button>`;
+      wrap.appendChild(row);
+      list.appendChild(wrap);
+
+      const check = row.querySelector(".sess-check");
+      if (state.selectedIds.has(s.id)) check.classList.add("on");
+
+      const onTap = () => {
+        if (state.selectMode) {
+          if (state.selectedIds.has(s.id)) state.selectedIds.delete(s.id);
+          else state.selectedIds.add(s.id);
+          check.classList.toggle("on", state.selectedIds.has(s.id));
+          updateSelectCount();
+          haptic("light");
+          return;
+        }
+        select(s.id);
+      };
+      row.addEventListener("click", onTap);
+      row.querySelector(".sess-more").addEventListener("click", (e) => {
+        e.stopPropagation(); rowMenu(s, e.currentTarget);
+      });
+      bindSwipeRow(wrap, s);
+      bindLongPress(row, s);
+    }
+  }
+}
 
 // Relative time for the session list. Runs in the browser, so Date is available
 // (the workflow-sandbox caveat elsewhere doesn't apply).
@@ -1160,50 +1856,51 @@ function select(id) {
   const s = state.sessions.find(x => x.id === id);
   if (s) {
     titleName.textContent = cleanTitle(s.name);
-    subText.textContent = s.model ? labelForModel(s.model) : (s.cwd || "session");
-    dot.className = s.state === "busy" ? "busy" : (s.state === "error" ? "error" : "");
-    // Composer pills + empty-state subtitle reflect the active session. Both pills
-    // derive from currentCwd()/currentModelId() — the SAME source the pickers use to
-    // mark a row selected — so the label and the checkmark can never drift apart.
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
   clearMessages();
   state.turn = null;
-  // Seed busy from the session's current state so opening a session whose turn
-  // is already running (started on another device) shows the replying status at
-  // once; the live turn_stopped clears it.
+  state.loadingHistory = true;
+  showHistorySkeleton();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
-  closeDrawer();
+  showChat();
+  haptic("light");
 }
-
-// =================== composer ===================
 function autoGrow() {
   inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
   updateSend();
 }
 function updateSend() {
   const has = inputEl.value.trim().length > 0;
-  if (state.busy) { sendBtn.className = "busy"; sendBtn.textContent = "■"; }
-  else { sendBtn.className = has ? "active" : ""; sendBtn.textContent = "↑"; }
+  sendBtn.classList.remove("active", "busy");
+  if (state.busy) {
+    sendBtn.classList.add("busy");
+    sendBtn.disabled = false;
+  } else if (has) {
+    sendBtn.classList.add("active");
+    sendBtn.disabled = false;
+  } else {
+    sendBtn.disabled = true;
+  }
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && window.__SYNAPSE__) {
-    // mobile uses the button; on desktop Enter sends
+  if (e.key === "Enter" && !e.shiftKey && state.view === "chat") {
     e.preventDefault(); doSend();
   }
 });
 sendBtn.addEventListener("click", () => {
-  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); return; }
+  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); haptic("medium"); return; }
   doSend();
 });
 function doSend() {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = ""; autoGrow();
+  haptic("light");
   if (!state.activeId) {
     // No session yet: start one (in the selected model/repo) and send the
     // message into it once it's created. Type-and-send always works.
@@ -1217,23 +1914,78 @@ function doSend() {
   send({ op: "send", sessionId: state.activeId, content: text });
 }
 
-// =================== drawer ===================
-$("drawerBtn").addEventListener("click", openDrawer);
-$("drawerClose").addEventListener("click", closeDrawer);
-$("drawerMask").addEventListener("click", closeDrawer);
+// =================== navigation ===================
+$("backBtn").addEventListener("click", () => {
+  haptic("light");
+  if (state.view === "workspaces" || (state.view === "sessions" && state.filterCwd)) {
+    if (history.state && history.state.synapse === "workspaces") history.back();
+    else if (state.filterCwd) { state.filterCwd = null; showSessions(); }
+    else showSessions();
+    return;
+  }
+  if (history.state && history.state.synapse === "chat") history.back();
+  else showSessions();
+});
+window.addEventListener("popstate", () => {
+  if (state.view === "chat") {
+    navFromPop = true;
+    showSessions();
+    navFromPop = false;
+  } else if (state.view === "workspaces") {
+    navFromPop = true;
+    showSessions();
+    navFromPop = false;
+  }
+});
 $("newBtn").addEventListener("click", newSession);
-$("newSessionBtn").addEventListener("click", newSession);
-$("refreshBtn").addEventListener("click", () => send({ op: "refresh" }));
+$("workspaceBtn").addEventListener("click", () => showWorkspaces());
+$("refreshBtn").addEventListener("click", () => {
+  send({ op: "refresh" });
+  send({ op: "refresh_cwds" });
+  haptic("light");
+});
+$("selectBtn").addEventListener("click", () => {
+  state.selectMode = !state.selectMode;
+  document.body.classList.toggle("select-mode", state.selectMode);
+  $("selectBtn").classList.toggle("active", state.selectMode);
+  if (state.selectMode) {
+    $("sessionToolbar").classList.remove("hidden");
+    updateSelectCount();
+  } else exitSelectMode();
+  renderSessions();
+});
+$("selectCancel").addEventListener("click", () => { exitSelectMode(); renderSessions(); });
+$("selectArchive").addEventListener("click", () => {
+  const ids = [...state.selectedIds];
+  if (!ids.length) return;
+  if (state.showArchived) send({ op: "unarchive", sessionIds: ids });
+  else send({ op: "archive", sessionIds: ids });
+  exitSelectMode();
+  haptic("medium");
+});
+$("archivedToggle").addEventListener("click", () => {
+  state.showArchived = !state.showArchived;
+  updateSelectCount();
+  renderSessions();
+});
+$("searchBtn").addEventListener("click", () => {
+  const wrap = $("searchWrap");
+  const hidden = wrap.classList.toggle("hidden");
+  $("searchBtn").classList.toggle("active", !hidden);
+  if (!hidden) $("search").focus();
+  else { $("search").value = ""; renderSessions(); }
+});
 $("search").addEventListener("input", renderSessions);
-function openDrawer() { $("drawer").classList.add("show"); $("drawerMask").classList.add("show"); }
-function closeDrawer() { $("drawer").classList.remove("show"); $("drawerMask").classList.remove("show"); }
+
 function newSession() {
+  if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
   if (state.pendingCwd) opts.cwd = state.pendingCwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
+  state.creating = true;
+  renderSessions();
   send({ op: "create", opts });
-  closeDrawer();
 }
 
 // suggestions
@@ -1266,7 +2018,9 @@ function currentCwd() {
   return (s ? s.cwd : state.pendingCwd) || "";
 }
 function syncModelLabel() {
-  const ml = $("modelLabel"); if (ml) ml.textContent = labelForModel(currentModelId());
+  const ml = $("modelLabel");
+  const id = currentModelId();
+  if (ml) ml.textContent = id ? labelForModel(id) : "Auto";
 }
 function syncLocalLabel() {
   const ll = $("localLabel"); const c = currentCwd();
@@ -1275,6 +2029,7 @@ function syncLocalLabel() {
 function closeMenus() {
   $("modelMenu").classList.remove("show");
   $("localMenu").classList.remove("show");
+  const am = $("attachMenu"); if (am) am.classList.remove("show");
   const pm = $("permMenu"); if (pm) pm.classList.remove("show");
 }
 // Render `items` ([{id,label,title?}]) into menu `id`, marking `cur` selected.
@@ -1353,10 +2108,7 @@ function openLocalMenu() {
   if (sel) sel.scrollIntoView({ block: "nearest" });
   inp.focus();
 }
-$("localCtl").addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleMenu("localMenu", openLocalMenu);
-});
+// local picker opened from attach (+) menu
 document.addEventListener("click", closeMenus);
 
 // =================== toast ===================
@@ -1389,9 +2141,97 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
-// Dev/debug hooks: expose the inbound dispatcher + state for inspection. Harmless
-// in production; lets tooling drive synthetic frames without a live API.
-initPermPill();
-window.__synapse = { handle, handleEvent, state };
+initAttachMenu();
+initKeyboardInset();
+initPullRefresh();
+initSheetDrag();
+if (creds()) hideConnectOverlay();
+updateSend();
+$("sheetClose").addEventListener("click", closeSheet);
+$("sheetMask").addEventListener("click", closeSheet);
+$("pairConnect").addEventListener("click", pairFromForm);
+$("pairManualConnect").addEventListener("click", pairFromForm);
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
 connect();
+
+function initKeyboardInset() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty("--kb", kb > 0 ? `${kb}px` : "0px");
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  apply();
+}
+
+function initPullRefresh() {
+  const list = $("sessionList");
+  const indicator = $("pullRefresh");
+  let startY = 0, pulling = false;
+  list.addEventListener("touchstart", (e) => {
+    if (list.scrollTop > 0 || state.view !== "sessions") return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  list.addEventListener("touchmove", (e) => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 0 && list.scrollTop <= 0) {
+      indicator.classList.toggle("pulling", dy > 40);
+      indicator.querySelector(".pull-label").textContent = dy > 72 ? "Release to refresh" : "Pull to refresh";
+    }
+  }, { passive: true });
+  const end = () => {
+    if (!pulling) return;
+    pulling = false;
+    if (indicator.classList.contains("pulling")) {
+      indicator.classList.remove("pulling");
+      indicator.classList.add("refreshing");
+      send({ op: "refresh" });
+      send({ op: "refresh_cwds" });
+      haptic("light");
+      setTimeout(() => indicator.classList.remove("refreshing"), 800);
+    } else {
+      indicator.classList.remove("pulling");
+    }
+  };
+  list.addEventListener("touchend", end);
+  list.addEventListener("touchcancel", end);
+}
+
+function initSheetDrag() {
+  const sheet = $("bottomSheet");
+  const handle = $("sheetHandle");
+  let startY = 0, curY = 0, dragging = false;
+  const onStart = (y) => { startY = y; dragging = true; sheet.classList.add("dragging"); };
+  const onMove = (y) => {
+    if (!dragging) return;
+    curY = Math.max(0, y - startY);
+    sheet.style.transform = `translateY(${curY}px)`;
+    const op = Math.max(0, 1 - curY / 280);
+    $("sheetMask").style.opacity = String(op * 0.55);
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove("dragging");
+    $("sheetMask").style.opacity = "";
+    if (curY > 100) closeSheet();
+    else sheet.style.transform = "";
+    curY = 0;
+  };
+  handle.addEventListener("touchstart", (e) => onStart(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchmove", (e) => onMove(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchend", onEnd);
+  sheet.addEventListener("touchstart", (e) => {
+    if (e.target === handle) return;
+    if (sheet.scrollTop <= 0) onStart(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (dragging) onMove(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchend", onEnd);
+}
 })();

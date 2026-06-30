@@ -2,79 +2,129 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <!-- mobile: fit viewport, no zoom, uses available height. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="color-scheme" content="dark light" />
   <title>Synapse</title>
-  <!-- code highlight theme follows the system scheme (Synara swaps code theme with the app theme) -->
   <link rel="stylesheet" href="vendor/github.min.css" media="(prefers-color-scheme: light)" />
   <link rel="stylesheet" href="vendor/github-dark.min.css" media="(prefers-color-scheme: dark)" />
   <link rel="stylesheet" href="app.css" />
 </head>
-<body>
-  <!-- Top bar -->
+<body class="mode-sessions">
   <header id="topbar">
-    <button id="drawerBtn" class="iconbtn" aria-label="Sessions">☰</button>
+    <button id="backBtn" class="iconbtn topbar-left" aria-label="Back" hidden>
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
     <div id="title">
       <div id="titleName">Synapse</div>
-      <div id="titleSub"><span id="dot"></span><span id="subText">no session</span></div>
     </div>
-    <button id="newBtn" class="iconbtn" aria-label="New session">＋</button>
+    <div class="topbar-right">
+      <button id="workspaceBtn" class="iconbtn" aria-label="Workspaces">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.5 6.5h5v5h-5v-5zm8 0h5v5h-5v-5zm-8 8h5v5h-5v-5zm8 0h5v5h-5v-5z" stroke="currentColor" stroke-width="1.4"/></svg>
+      </button>
+      <button id="searchBtn" class="iconbtn" aria-label="Search">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+      <button id="refreshBtn" class="iconbtn" aria-label="Refresh">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M16 10a6 6 0 1 1-1.8-4.2M16 4v4h-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="selectBtn" class="iconbtn" aria-label="Select sessions">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7.5 10l2 2 3.5-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="newBtn" class="iconbtn" aria-label="New session">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
   </header>
 
-  <!-- Reconnect banner -->
   <div id="reconnect">Reconnecting…</div>
-
-  <!-- Toast -->
   <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
 
-  <!-- Message list -->
-  <main id="scroller">
-    <div id="messages"></div>
-  </main>
-
-  <!-- "new messages" pill -->
-  <button id="newPill">↓ New</button>
-
-  <!-- Empty state — Synara: logo + "Let's build" -->
-  <div id="empty">
-    <div class="brand">✦</div>
-    <h1>Let's build</h1>
-    <p id="emptySub"></p>
-    <div class="suggestions">
-      <button data-prompt="Summarize the recent changes in this repo.">Summarize recent changes</button>
-      <button data-prompt="Explain what this project does.">Explain this project</button>
-      <button data-prompt="Find and fix any failing tests.">Find and fix failing tests</button>
+  <!-- Session list (no composer) -->
+  <section id="sessionView">
+    <div id="pullRefresh" class="hidden" aria-hidden="true"><span class="pull-spin"></span><span class="pull-label">Release to refresh</span></div>
+    <div id="searchWrap" class="hidden">
+      <input id="search" type="search" placeholder="Search sessions" autocomplete="off" />
     </div>
-  </div>
+    <div id="sessionList"></div>
+    <button type="button" id="archivedToggle" class="archived-toggle hidden">Show archived</button>
+    <div id="sessionToolbar" class="hidden">
+      <span id="selectCount">0 selected</span>
+      <button type="button" id="selectArchive" class="toolbar-btn">Archive</button>
+      <button type="button" id="selectCancel" class="toolbar-btn secondary">Cancel</button>
+    </div>
+  </section>
 
-  <!-- Composer — Synara stacked panel: input + bottom control row -->
-  <footer id="composer">
-    <div id="composerRow">
-      <textarea id="input" rows="1" placeholder="Ask for follow-up changes or attach images"></textarea>
-      <div id="composerControls">
-        <span class="ctl" id="localCtl"><span class="ico">⎇</span><span id="localLabel">Local</span></span>
-        <span class="ctl" id="modelCtl"><span class="ico">◆</span><span id="modelLabel">Model</span></span>
-        <span class="spacer"></span>
-        <button id="sendBtn" aria-label="Send">↑</button>
+  <!-- Workspaces (repo picker) -->
+  <section id="workspaceView">
+    <div id="workspaceList"></div>
+  </section>
+
+  <!-- Chat (composer only here) -->
+  <div id="chatView">
+    <main id="scroller">
+      <div id="messages"></div>
+    </main>
+    <button id="newPill">↓ New</button>
+    <div id="empty">
+      <div class="brand">✦</div>
+      <h1>Let's build</h1>
+      <p id="emptySub"></p>
+      <div class="suggestions">
+        <button data-prompt="Summarize the recent changes in this repo.">Summarize recent changes</button>
+        <button data-prompt="Explain what this project does.">Explain this project</button>
+        <button data-prompt="Find and fix any failing tests.">Find and fix failing tests</button>
       </div>
     </div>
-    <div id="modelMenu" class="model-menu"></div>
-    <div id="localMenu" class="model-menu"></div>
-  </footer>
+    <footer id="composer">
+      <div id="composerDock">
+        <div id="composerRow">
+          <textarea id="input" rows="1" placeholder="Follow up…"></textarea>
+          <div id="composerControls">
+            <button id="attachBtn" class="dock-btn" aria-label="More">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+            <button class="dock-btn dock-text" id="modelCtl"><span id="modelLabel">Auto</span></button>
+            <span class="spacer"></span>
+            <button id="sendBtn" aria-label="Send">
+              <svg class="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="modelMenu" class="model-menu"></div>
+      <div id="localMenu" class="model-menu"></div>
+      <div id="attachMenu" class="model-menu"></div>
+    </footer>
+  </div>
 
-  <!-- Drawer overlay -->
-  <div id="drawerMask"></div>
-  <aside id="drawer">
-    <div id="drawerHead">
-      <span class="brandname">Synapse</span>
-      <button id="refreshBtn" class="iconbtn" aria-label="Refresh">↻</button>
-      <button id="drawerClose" class="iconbtn" aria-label="Close">✕</button>
+  <div id="sheetMask"></div>
+  <div id="bottomSheet">
+    <div id="sheetHandle"></div>
+    <div id="sheetHead">
+      <button id="sheetClose" aria-label="Close">✕</button>
+      <span id="sheetTitle"></span>
     </div>
-    <button id="newSessionBtn">+  New session</button>
-    <input id="search" type="text" placeholder="Search sessions" />
-    <div id="sessionList"></div>
-  </aside>
+    <div id="sheetBody"></div>
+  </div>
+
+  <div id="connectOverlay">
+    <div class="connect-card">
+      <h2>Connect to Claude Code</h2>
+      <p class="connect-hint">Paste the <code>synapse://</code> link from the terminal where <code>synapse-server</code> is running.</p>
+      <textarea id="pairLink" rows="3" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0"></textarea>
+      <button id="pairConnect" class="connect-btn">Connect</button>
+      <details class="connect-manual">
+        <summary>Manual connection</summary>
+        <label>Host <input id="pairHost" type="text" placeholder="192.168.1.10" autocomplete="off" /></label>
+        <label>Port <input id="pairPort" type="text" placeholder="4173" inputmode="numeric" /></label>
+        <label>Token <input id="pairToken" type="text" placeholder="CODE" autocomplete="off" /></label>
+        <label class="pair-tls"><input id="pairTls" type="checkbox" /> Secure (wss / TLS)</label>
+        <button id="pairManualConnect" class="connect-btn secondary">Connect manually</button>
+      </details>
+    </div>
+  </div>
 
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>
