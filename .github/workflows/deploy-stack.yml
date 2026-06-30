@@ -1,0 +1,71 @@
+# Deploy full stack (web + synapse-server) to a VPS via SSH.
+#
+# Required secrets (repository Settings → Secrets):
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH
+# Optional variables (repository Settings → Variables):
+#   SYNAPSE_TOKEN   pairing token (default CODE)
+#   SYNAPSE_CWD     project dir on server (default /var/synapse/workspace)
+#
+# Server one-time setup:
+#   1. Install Docker + docker compose plugin
+#   2. Install Claude Code CLI on the host (claude on PATH inside container mount)
+#   3. Clone repo to DEPLOY_PATH and copy deploy/docker-compose.yml + Caddyfile
+name: Deploy Full Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      site_address:
+        description: "Public domain for Caddy (e.g. synapse.example.com) or leave empty for :80"
+        required: false
+        default: ""
+  push:
+    branches: [master, main]
+    paths:
+      - "crates/server/**"
+      - "crates/app/web/**"
+      - "deploy/**"
+      - ".github/workflows/deploy-stack.yml"
+
+jobs:
+  deploy:
+    name: VPS full stack
+    runs-on: ubuntu-latest
+    if: ${{ secrets.DEPLOY_HOST != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rsync project to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -avz --delete \
+            --exclude target --exclude .git --exclude mobile/build_sim \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+
+      - name: docker compose up
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          SYNAPSE_TOKEN: ${{ vars.SYNAPSE_TOKEN || 'CODE' }}
+          SYNAPSE_CWD: ${{ vars.SYNAPSE_CWD || '/var/synapse/workspace' }}
+          SITE_ADDRESS: ${{ github.event.inputs.site_address || vars.SITE_ADDRESS || '' }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: SYNAPSE_TOKEN,SYNAPSE_CWD,SITE_ADDRESS
+          script: |
+            cd "${{ secrets.DEPLOY_PATH }}/deploy"
+            export SYNAPSE_TOKEN SYNAPSE_CWD SITE_ADDRESS
+            docker compose pull caddy 2>/dev/null || true
+            docker compose up -d --build
+            echo "Stack running. Web UI + WS on port 80/443."
+            echo "Pairing link: synapse://${{ secrets.DEPLOY_HOST }}:4173?token=${SYNAPSE_TOKEN}"

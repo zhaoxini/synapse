@@ -87,6 +87,24 @@
     <div id="sheetBody"></div>
   </div>
 
+  <!-- Pairing: connect WebView to remote synapse-server (Claude Code machine) -->
+  <div id="connectOverlay">
+    <div class="connect-card">
+      <h2>Connect to Claude Code</h2>
+      <p class="connect-hint">Paste the <code>synapse://</code> link from the terminal where <code>synapse-server</code> is running.</p>
+      <textarea id="pairLink" rows="3" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0"></textarea>
+      <button id="pairConnect" class="connect-btn">Connect</button>
+      <details class="connect-manual">
+        <summary>Manual connection</summary>
+        <label>Host <input id="pairHost" type="text" placeholder="192.168.1.10" autocomplete="off" /></label>
+        <label>Port <input id="pairPort" type="text" placeholder="4173" inputmode="numeric" /></label>
+        <label>Token <input id="pairToken" type="text" placeholder="CODE" autocomplete="off" /></label>
+        <label class="pair-tls"><input id="pairTls" type="checkbox" /> Secure (wss / TLS)</label>
+        <button id="pairManualConnect" class="connect-btn secondary">Connect manually</button>
+      </details>
+    </div>
+  </div>
+
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>
   <script src="app.js"></script>

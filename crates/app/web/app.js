@@ -42,14 +42,112 @@ const state = {
   msNow: 0,           // monotonic-ish clock fed from frames (no Date in workflow ctx, fine here)
 };
 
-// ---- credential injection from native (pairing) ----
+// ---- credential injection: native / URL / localStorage ----
+const CREDS_KEY = "synapse_creds";
+
 function creds() {
   if (window.__SYNAPSE__) return window.__SYNAPSE__;
-  // dev fallback from querystring
   const p = new URLSearchParams(location.search);
-  const h = p.get("host"), port = p.get("port"), tok = p.get("token");
-  if (h && tok) return { host: h, port: port || "4173", token: tok, tls: p.get("tls") === "1", path: p.get("path") || "" };
+  const h = p.get("host"), tok = p.get("token");
+  if (h && tok) {
+    return {
+      host: h,
+      port: p.get("port") || "4173",
+      token: tok,
+      tls: p.get("tls") === "1",
+      path: p.get("path") || "",
+    };
+  }
+  try {
+    const raw = localStorage.getItem(CREDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
   return null;
+}
+
+function persistCreds(c) {
+  try { localStorage.setItem(CREDS_KEY, JSON.stringify(c)); } catch {}
+}
+
+function clearCreds() {
+  try { localStorage.removeItem(CREDS_KEY); } catch {}
+}
+
+// Parse synapse:// / wss:// pairing links (mirrors crates/app/src/net.rs).
+function parsePairLink(link) {
+  const raw = link.trim();
+  if (!raw) return null;
+  let body = raw
+    .replace(/^synapse:\/\//, "")
+    .replace(/^synapse:/, "")
+    .replace(/^wss:\/\//, "")
+    .replace(/^ws:\/\//, "");
+  const qIdx = body.indexOf("?");
+  const authPath = qIdx >= 0 ? body.slice(0, qIdx) : body;
+  const query = qIdx >= 0 ? body.slice(qIdx + 1) : "";
+  const params = new URLSearchParams(query);
+  const token = params.get("token") || "";
+  const tls = params.get("tls") === "1" || params.get("tls") === "true";
+  if (!token) return null;
+
+  const slash = authPath.indexOf("/");
+  if (slash >= 0) {
+    const authority = authPath.slice(0, slash);
+    const path = authPath.slice(slash);
+    const { host, port } = splitHostPort(authority, tls);
+    if (!host) return null;
+    return { host, port, token, tls, path };
+  }
+  const { host, port } = splitHostPort(authPath, tls);
+  if (!host) return null;
+  return { host, port, token, tls, path: "" };
+}
+
+function splitHostPort(authority, tls) {
+  const i = authority.lastIndexOf(":");
+  if (i > 0) {
+    const port = authority.slice(i + 1);
+    if (/^\d+$/.test(port)) {
+      return { host: authority.slice(0, i), port };
+    }
+  }
+  return { host: authority, port: tls ? "443" : "80" };
+}
+
+function showConnectOverlay() {
+  $("connectOverlay").classList.remove("hidden");
+}
+function hideConnectOverlay() {
+  $("connectOverlay").classList.add("hidden");
+}
+
+function applyCreds(c) {
+  window.__SYNAPSE__ = c;
+  persistCreds(c);
+  hideConnectOverlay();
+  state.url = buildUrl(c);
+  state.backoff = 1000;
+  doConnect(true);
+}
+
+function pairFromForm() {
+  const link = ($("pairLink").value || "").trim();
+  if (link) {
+    const c = parsePairLink(link);
+    if (!c) { toast("Invalid pairing link"); return; }
+    applyCreds(c);
+    return;
+  }
+  const host = ($("pairHost").value || "").trim();
+  const token = ($("pairToken").value || "").trim();
+  if (!host || !token) { toast("Host and token required"); return; }
+  applyCreds({
+    host,
+    port: ($("pairPort").value || "4173").trim(),
+    token,
+    tls: $("pairTls").checked,
+    path: "",
+  });
 }
 
 function buildUrl(c) {
@@ -61,7 +159,8 @@ function buildUrl(c) {
 // =================== connection ===================
 function connect() {
   const c = creds();
-  if (!c) { toast("No pairing credentials"); return; }
+  if (!c) { showConnectOverlay(); return; }
+  window.__SYNAPSE__ = c;
   state.url = buildUrl(c);
   doConnect(true);
 }
@@ -72,6 +171,8 @@ function doConnect(first) {
   state.ws.onopen = () => {
     state.connected = true;
     state.backoff = 1000;
+    if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
+    hideConnectOverlay();
     $("reconnect").classList.remove("show");
     // prime session list
     send({ op: "list" });
@@ -88,8 +189,8 @@ function doConnect(first) {
   state.ws.onclose = () => {
     state.connected = false;
     if (first) {
-      // pairing failure — surface, no retry loop (native will re-inject on retry)
-      toast("Could not connect");
+      toast("Could not connect — check link and server");
+      showConnectOverlay();
     } else {
       $("reconnect").classList.add("show");
       scheduleReconnect(false);
@@ -931,6 +1032,13 @@ function openAttachMenu() {
   addRow(`Permissions · ${permLabelFor(currentMode())}`, () => {
     openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
   });
+  addRow("Change server…", () => {
+    if (state.ws) { state.ws.close(); state.ws = null; }
+    state.connected = false;
+    clearCreds();
+    window.__SYNAPSE__ = null;
+    showConnectOverlay();
+  });
   menu.classList.add("show");
 }
 
@@ -1630,6 +1738,8 @@ function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 initAttachMenu();
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
-window.__synapse = { handle, handleEvent, state };
+$("pairConnect").addEventListener("click", pairFromForm);
+$("pairManualConnect").addEventListener("click", pairFromForm);
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
 connect();
 })();
