@@ -302,13 +302,13 @@ function splitTurn(tn) {
   return { replyText: "", workItems: tn.order };
 }
 
-// Render the active turn. `settled` collapses work into a single summary line
-// (Cursor style); while running it shows live status lines.
+// Render the active turn. While running, work shows in a fixed-height activity
+// feed that scrolls upward as new steps arrive; when settled it collapses to one line.
 function renderTurn(settled) {
   const tn = state.turn;
   if (!tn) return;
   const { replyText, workItems } = splitTurn(tn);
-  const hasWork = workItems.length > 0;
+  const hasWork = workItems.length > 0 || (state.busy && !settled);
 
   tn.workWrap.innerHTML = "";
   if (hasWork) {
@@ -316,11 +316,18 @@ function renderTurn(settled) {
       const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
       const secs = tn.ticks > 0 ? tn.ticks : tsSecs;
       const summary = summarizeWork(workItems, tn, secs);
-      const line = statusLine(summary, () => openWorkSheet(workItems, tn, secs));
-      line.className = "status-line work-summary";
+      const line = statusLine(summary, () => openWorkSheet(workItems, tn, secs), "work-summary has-action");
       tn.workWrap.appendChild(line);
     } else {
-      buildWorkItems(tn.workWrap, workItems, tn, false);
+      const feed = document.createElement("div");
+      feed.className = "activity-feed";
+      const scroll = document.createElement("div");
+      scroll.className = "activity-scroll";
+      feed.appendChild(scroll);
+      tn.workWrap.appendChild(feed);
+      tn.activityFeed = feed;
+      renderActivityFeed(scroll, workItems, tn);
+      scrollActivityFeed(feed, scroll);
     }
   }
 
@@ -328,31 +335,113 @@ function renderTurn(settled) {
   if (replyText) tn.replyWrap.appendChild(mdEl(replyText));
 }
 
-function buildWorkItems(container, items, tn, settled) {
-  for (const it of items) {
-    if (it.kind === "thinking") {
-      const secs = thinkingSecs(tn);
-      const running = !settled && isThinkingActive(tn, it);
-      const line = statusLine(thinkingLabel(secs, running), () => openThinkingSheet(it.text, secs));
-      if (running) line.classList.add("running");
-      container.appendChild(line);
-    } else if (it.kind === "text") {
-      container.appendChild(mdEl(it.text));
-    } else if (it.kind === "tool") {
-      const t = tn.tools.get(it.id);
-      if (!t) continue;
-      const line = statusLine(toolStatusLabel(t), () => openToolSheet(t));
-      if (t.status === "running") line.classList.add("running");
-      container.appendChild(line);
-    }
+function scrollActivityFeed(feed, scroll) {
+  requestAnimationFrame(() => {
+    const overflow = scroll.scrollHeight - feed.clientHeight;
+    if (overflow > 0) scroll.style.transform = `translateY(-${overflow}px)`;
+    else scroll.style.transform = "";
+  });
+}
+
+function renderActivityFeed(scroll, items, tn) {
+  scroll.innerHTML = "";
+  const lastIdx = items.length - 1;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (i === lastIdx && state.busy && isItemActive(it, tn)) continue;
+    appendActivityLine(scroll, it, tn, i, items);
+  }
+  const now = activeItemLine(items, tn);
+  if (now) {
+    const cls = "status-now has-action" + (now.running ? " running" : "");
+    scroll.appendChild(statusLine(now.label, now.onClick, cls));
   }
 }
 
-function statusLine(label, onClick) {
+function isItemActive(it, tn) {
+  if (it.kind === "thinking") return isThinkingActive(tn, it);
+  if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    return t && t.status === "running";
+  }
+  return false;
+}
+
+function appendActivityLine(scroll, it, tn, idx, items) {
+  if (it.kind === "thinking") {
+    const secs = thinkingSecsForItem(tn, it, idx, items);
+    scroll.appendChild(statusLine(
+      secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought",
+      () => openThinkingSheet(it.text, secs),
+      "has-action"
+    ));
+  } else if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    if (!t) return;
+    scroll.appendChild(statusLine(toolStatusLabel(t), () => openToolSheet(t), "has-action"));
+  }
+}
+
+function thinkingSecsForItem(tn, item, idx, items) {
+  if (idx < items.length - 1) {
+    const next = items[idx + 1];
+    if (next && next.kind === "tool") return Math.max(1, thinkingSecs(tn));
+  }
+  const secs = thinkingSecs(tn);
+  return secs > 0 ? secs : 1;
+}
+
+function activeItemLine(items, tn) {
+  if (!state.busy) return null;
+  const last = items[items.length - 1];
+  if (last && last.kind === "text" && last.text) return null;
+  if (!last) return { label: "Planning next moves", running: true };
+  if (last.kind === "thinking" && isThinkingActive(tn, last)) {
+    const secs = thinkingSecs(tn);
+    return {
+      label: secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thinking…",
+      running: true,
+      onClick: () => openThinkingSheet(last.text, secs),
+    };
+  }
+  if (last.kind === "tool") {
+    const t = tn.tools.get(last.id);
+    if (t && t.status === "running") {
+      return { label: currentToolAction(t), running: true, onClick: () => openToolSheet(t) };
+    }
+  }
+  return { label: "Planning next moves", running: true };
+}
+
+function currentToolAction(t) {
+  const a = t.args || {};
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  switch (t.name) {
+    case "Edit": case "Write": case "MultiEdit": case "NotebookEdit":
+      return file ? `Editing ${file}` : "Editing";
+    case "Read": case "LS":
+      return file ? `Reading ${file}` : "Reading";
+    case "Grep": return `Searching ${str(a.pattern)}`;
+    case "Glob": return `Searching ${str(a.pattern)}`;
+    case "Bash": return "Running command";
+    case "Task": return "Running task";
+    case "WebSearch": return `Searching ${firstLine(str(a.query))}`;
+    case "WebFetch": return `Fetching ${hostOf(a.url)}`;
+    case "TodoWrite": return "Updating plan";
+    default: return toolMeta(t).title;
+  }
+}
+
+function statusLine(label, onClick, extraClass) {
   const btn = document.createElement("button");
-  btn.className = "status-line";
-  btn.textContent = label;
-  if (onClick) btn.addEventListener("click", onClick);
+  btn.className = "status-line" + (extraClass ? " " + extraClass : "");
+  if (onClick) {
+    btn.classList.add("has-action");
+    btn.innerHTML = `${escapeHtml(label)}<span class="chev"> ›</span>`;
+    btn.addEventListener("click", onClick);
+  } else {
+    btn.textContent = label;
+  }
   return btn;
 }
 
@@ -373,22 +462,50 @@ function thinkingLabel(secs, running) {
 }
 
 function toolStatusLabel(t) {
+  const a = t.args || {};
   const meta = toolMeta(t);
-  const sub = meta.sub ? ` ${meta.sub}` : "";
-  if (t.status === "running") {
-    if (t.name === "Task") return `Running task${sub}…`;
-    return `Running ${meta.title.toLowerCase()}${sub}…`;
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  if (t.status === "running") return currentToolAction(t);
+  switch (t.name) {
+    case "Edit": {
+      const d = lineDiff(str(a.old_string), str(a.new_string));
+      return `Edited ${file} ${diffStat(d)}`;
+    }
+    case "MultiEdit": {
+      const edits = Array.isArray(a.edits) ? a.edits : [];
+      let ad = 0, de = 0;
+      for (const e of edits) { const d = lineDiff(str(e.old_string), str(e.new_string)); ad += d.adds; de += d.dels; }
+      return `Edited ${file} +${ad} −${de}`;
+    }
+    case "Write": {
+      const n = str(a.content).split("\n").length;
+      return `Edited ${file} +${n}`;
+    }
+    case "NotebookEdit":
+      return `Edited ${file}`;
+    case "Read": case "LS":
+      return file ? `Read ${file}` : "Explored files";
+    case "Grep":
+      return `Grepped ${str(a.pattern)}${a.path ? " in " + basename(a.path) : ""}`;
+    case "Glob":
+      return `Searched ${str(a.pattern)}`;
+    case "Bash":
+      return `Ran ${firstLine(str(a.command))}`;
+    case "Task":
+      return `Completed task ${meta.sub || meta.title}`;
+    case "WebSearch":
+      return `Searched ${firstLine(str(a.query))}`;
+    case "WebFetch":
+      return `Fetched ${hostOf(a.url)}`;
+    case "TodoWrite":
+      return "Updated plan";
+    case "AskUserQuestion":
+      return `Asked ${firstLine(askText(a))}`;
+    case "ExitPlanMode": case "exit_plan_mode":
+      return "Proposed plan";
+    default:
+      return `Used ${meta.title.toLowerCase()}${meta.sub ? " · " + meta.sub : ""}`;
   }
-  if (t.name === "Task") return `Completed task${sub}`;
-  if (["Read", "LS", "Glob", "Grep"].includes(t.name)) return `Explored${sub || " files"}`;
-  if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(t.name)) return `Edited${sub}`;
-  if (t.name === "Bash") return `Ran${sub || " command"}`;
-  if (t.name === "WebSearch") return `Searched${sub}`;
-  if (t.name === "WebFetch") return `Fetched${sub}`;
-  if (t.name === "TodoWrite") return "Updated plan";
-  if (t.name === "AskUserQuestion") return `Asked${sub}`;
-  if (t.name === "ExitPlanMode" || t.name === "exit_plan_mode") return "Proposed plan";
-  return `Used ${meta.title.toLowerCase()}${sub}`;
 }
 
 function summarizeWork(items, tn, secs) {
@@ -756,7 +873,6 @@ function showPermission(evt) {
   body.appendChild(card); permEl.appendChild(body);
   messagesEl.appendChild(permEl);
   emptyEl.classList.add("hidden");
-  if (pulseEl) { pulseEl.remove(); pulseEl = null; }  // await a human, not "working"
   ensurePinned();
 }
 function removePermission() { if (permEl) { permEl.remove(); permEl = null; } }
@@ -1107,35 +1223,31 @@ function setBusy(b) {
   updatePulse();
   updateSend();
 }
-// The typing indicator shows while the turn is busy and working — before the
-// first token, while thinking, and while any tool runs. It hides only once the
-// FINAL answer is streaming (text present, no tool still running), where the
-// streaming text is itself the activity. It sits at the end of the list.
-let pulseEl = null;
+// Activity indicator: keep the turn's activity feed visible while working.
 let tickTimer = null;
 function updatePulse() {
-  // A mid-turn preamble ("Let me read the README…") followed by running tools must
-  // keep pulsing, so a running tool always forces the pulse on despite that text.
   const tn = state.turn;
   const toolRunning = tn && [...tn.tools.values()].some(t => t.status === "running");
   const last = tn && tn.order[tn.order.length - 1];
   const hasReply = !!(last && last.kind === "text" && last.text);
   const show = state.busy && (toolRunning || !hasReply);
-  if (show) {
-    if (!pulseEl) {
-      pulseEl = document.createElement("div");
-      pulseEl.className = "msg assistant pulse-row";
-      pulseEl.innerHTML = `<div class="body"><span class="status-line running">Thinking…</span></div>`;
-    }
-    messagesEl.appendChild(pulseEl); // move to end (after work items)
-    emptyEl.classList.add("hidden");
+  if (show && tn) {
+    ensureTurnInDom();
+    renderTurn(false);
     ensurePinned();
-  } else if (pulseEl) {
-    pulseEl.remove(); pulseEl = null;
   }
-  // elapsed counter: tick once a second while busy, feeding "Worked for Xs"
   if (state.busy && !tickTimer) {
-    tickTimer = setInterval(() => { if (state.turn) state.turn.ticks++; }, 1000);
+    tickTimer = setInterval(() => {
+      if (state.turn) {
+        state.turn.ticks++;
+        renderTurn(false);
+        if (state.turn.activityFeed) {
+          const scroll = state.turn.activityFeed.querySelector(".activity-scroll");
+          if (scroll) scrollActivityFeed(state.turn.activityFeed, scroll);
+        }
+        ensurePinned();
+      }
+    }, 1000);
   } else if (!state.busy && tickTimer) {
     clearInterval(tickTimer); tickTimer = null;
   }
