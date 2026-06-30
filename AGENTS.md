@@ -54,3 +54,27 @@ CI (`.github/workflows/ci.yml`) only fmt/clippy/test/builds — there is no auto
 - **Server / relay (Rust):** `cargo build --release -p synapse-server` (and `-p synapse-relay`), copy the binary to the host, restart the process. Expose remotely with `--tls` (real or self-signed cert), `--tunnel` (Cloudflare), or a self-hosted `synapse-relay` — all documented in `README.md`.
 - **Web UI change reaching users:** because the bundle is compiled in, a page change ships only by **rebuilding + redeploying** the binary that serves it (`synapse-web`, and/or rebuilding+reinstalling the iOS app via `mobile/build-*.sh` on macOS). Updating `crates/app/web/**` alone never reaches an already-deployed binary.
 - **Desktop/iOS app:** rebuild the relevant artifact (desktop `synapse-app`, or the iOS `.app`/staticlib) and reinstall on the device — there is no auto-update channel.
+
+### What carries over to a new session (and what does NOT)
+
+A fresh cloud-agent session does **not** know the previous session's running server or its `trycloudflare.com` URL — quick-tunnel hostnames are random per run and die with the tunnel/VM. Only three things persist:
+
+1. **Committed repo files, once merged to the base branch.** This AGENTS.md reaches future sessions only after merge — a new session checks out base, not an open PR branch. So durable knowledge (CI/CD, run steps) must live here and be merged, not kept as a one-off address.
+2. **Secrets** (right-hand panel) — injected as env vars every session. Put the DeepSeek key (and any tunnel token / fixed hostname) here.
+3. **VM snapshot** — installed `cloudflared`, `~/.npm-global/bin/claude`, `~/.claude/settings.json`, `rustup default stable`.
+
+For a **stable address** across sessions, don't rely on quick tunnels: use a Cloudflare *named* tunnel (fixed hostname) or a `synapse-relay` deployment, store its token/hostname as a Secret, and record the fixed hostname here.
+
+### Per-session bring-up runbook
+
+After the startup update script has run, any session can reproduce the full stack:
+
+```sh
+cargo build                                   # or --release
+./target/debug/synapse-server --port 4173 --token CODE \
+    --cwd /tmp/synapse-demo --bin ~/.npm-global/bin/claude   # DeepSeek via env/settings.json
+./target/debug/synapse-web --port 8765
+# local:  http://127.0.0.1:8765/?host=127.0.0.1&port=4173&token=CODE
+# phone:  cloudflared tunnel --url http://127.0.0.1:4173  AND  --url http://127.0.0.1:8765
+#         then https://<web-host>/?host=<server-host>&port=443&token=CODE&tls=1
+```
