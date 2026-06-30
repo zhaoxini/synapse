@@ -15,8 +15,6 @@ const emptyEl = $("empty");
 const inputEl = $("input");
 const sendBtn = $("sendBtn");
 const titleName = $("titleName");
-const subText = $("subText");
-const dot = $("dot");
 
 const state = {
   ws: null,
@@ -24,6 +22,7 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
+  view: "sessions", // "sessions" | "chat"
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
@@ -174,6 +173,7 @@ function doConnect(first) {
     if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
     hideConnectOverlay();
     $("reconnect").classList.remove("show");
+    showSessions();
     // prime session list
     send({ op: "list" });
     if (first) {
@@ -268,10 +268,10 @@ function handleEvent(evt) {
     const i = state.sessions.findIndex(x => x.id === evt.sessionId);
     if (i >= 0) state.sessions.splice(i, 1);
     if (evt.sessionId === state.activeId) {
-      state.activeId = ""; clearMessages(); titleName.textContent = "Synapse"; setBusy(false);
+      state.activeId = ""; clearMessages(); titleName.textContent = workspaceName(); setBusy(false);
+      showSessions();
     }
     renderSessions();
-    if (!state.activeId && state.sessions.length) select(state.sessions[0].id);
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
@@ -1327,7 +1327,6 @@ $("newPill").addEventListener("click", () => {
 function setBusy(b) {
   state.busy = b;
   sendBtn.classList.toggle("busy", b);
-  if (dot) dot.classList.toggle("busy", b);
   updatePulse();
   updateSend();
 }
@@ -1371,10 +1370,9 @@ function setSessions(list) {
   // to auto-select a live session instead of sitting on "new session" forever.
   if (state.activeId && !state.sessions.some((s) => s.id === state.activeId)) {
     state.activeId = "";
+    if (state.view === "chat") showSessions();
   }
-  if (!state.activeId && state.sessions.length) {
-    select(state.sessions[0].id);
-  }
+  updateTopbar();
 }
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
@@ -1389,7 +1387,7 @@ function setSessionState(id, st) {
   if (!ses || ses.state === st) return;
   ses.state = st;
   renderSessions();
-  if (id === state.activeId) dot.className = st === "busy" ? "busy" : (st === "error" ? "error" : "");
+  if (id === state.activeId && state.view === "chat") updateTopbar();
 }
 // Session titles come from the transcript's first user line, which is often
 // command/hook boilerplate (/goal stop-hooks, continuation summaries, local-
@@ -1436,63 +1434,107 @@ function rowMenu(s, anchor) {
 }
 document.addEventListener("click", closeRowMenu);
 
-function renderSessions() {
-  const q = $("search").value.toLowerCase();
-  const list = $("sessionList");
-  list.innerHTML = "";
-  // Group by project (cwd) — a cross-project list mixing synapse/dcc/llm-proxy in
-  // random order was the "散乱" pile. Groups are ordered by their most-recent
-  // session; rows within a group are most-recent-first.
-  const f = state.sessions
-    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q));
-  const groups = new Map();
-  for (const s of f) {
-    const proj = (s.cwd || "").split("/").filter(Boolean).pop() || "other";
-    if (!groups.has(proj)) groups.set(proj, []);
-    groups.get(proj).push(s);
-  }
-  const ordered = [...groups.entries()]
-    .map(([proj, items]) => {
-      items.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
-      return { proj, items, recent: items[0] ? (items[0].started_at || 0) : 0 };
-    })
-    .sort((a, b) => b.recent - a.recent);
-  for (const g of ordered) {
-    const collapsed = collapsedGroups.has(g.proj);
-    const h = document.createElement("div");
-    h.className = "s-group" + (collapsed ? " collapsed" : "");
-    h.innerHTML = `<span class="chev">▸</span><span class="s-group-name">${escapeHtml(g.proj)}</span><span class="s-group-n">${g.items.length}</span>`;
-    const body = document.createElement("div");
-    body.className = "s-group-items";
-    for (const s of g.items) {
-      const it = document.createElement("div");
-      it.className = "s-item" + (s.id === state.activeId ? " active" : "");
-      // Single tight line: [status only if busy/error] title …… time.
-      // Idle is the default state, so it gets NO dot (a dot on every row was just noise).
-      const st = s.state === "busy" ? `<span class="st busy"></span>`
-               : s.state === "error" ? `<span class="st error"></span>` : "";
-      it.innerHTML =
-        st +
-        `<span class="label">${escapeHtml(cleanTitle(s.name))}</span>` +
-        `<span class="when">${escapeHtml(relTime(s.started_at || 0))}</span>` +
-        `<button class="s-more" aria-label="Session actions">⋯</button>`;
-      it.addEventListener("click", () => select(s.id));
-      it.querySelector(".s-more").addEventListener("click", (e) => { e.stopPropagation(); rowMenu(s, e.currentTarget); });
-      body.appendChild(it);
-    }
-    // Header toggles its group. Track folded projects in a Set so a re-render
-    // (WS update, search) doesn't pop everything back open.
-    h.addEventListener("click", () => {
-      const nowCollapsed = h.classList.toggle("collapsed");
-      if (nowCollapsed) collapsedGroups.add(g.proj); else collapsedGroups.delete(g.proj);
-    });
-    list.appendChild(h);
-    list.appendChild(body);
+function workspaceName() {
+  const sorted = [...state.sessions].sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+  const cwd = sorted[0] && sorted[0].cwd;
+  return cwd ? basename(cwd) : "Synapse";
+}
+
+function dayGroup(ms) {
+  if (!ms) return "Earlier";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterday = today - 86400000;
+  const d = new Date(ms);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  if (day >= today) return "Today";
+  if (day >= yesterday) return "Yesterday";
+  return "Earlier";
+}
+
+function sessionSubtitle(s) {
+  if (s.state === "busy") return { text: "Working", cls: "working" };
+  if (s.state === "error") return { text: "Failed", cls: "error" };
+  const t = s.started_at || 0;
+  return t ? { text: relTime(t), cls: "" } : { text: "", cls: "" };
+}
+
+function showSessions() {
+  state.view = "sessions";
+  document.body.classList.add("mode-sessions");
+  document.body.classList.remove("mode-chat");
+  updateTopbar();
+  renderSessions();
+}
+
+function showChat() {
+  state.view = "chat";
+  document.body.classList.remove("mode-sessions");
+  document.body.classList.add("mode-chat");
+  updateTopbar();
+}
+
+function updateTopbar() {
+  if (state.view === "sessions") {
+    titleName.textContent = workspaceName();
+  } else {
+    const s = state.sessions.find(x => x.id === state.activeId);
+    titleName.textContent = s ? cleanTitle(s.name) : "Chat";
   }
 }
 
-// Project groups the user has folded in the drawer (survives re-renders).
-const collapsedGroups = new Set();
+function renderSessions() {
+  const q = ($("search").value || "").toLowerCase();
+  const list = $("sessionList");
+  list.innerHTML = "";
+  const f = state.sessions
+    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q))
+    .sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+
+  if (!f.length) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = q ? "No matching sessions" : "No sessions yet — tap + to start";
+    list.appendChild(hint);
+    return;
+  }
+
+  const groups = new Map();
+  const order = ["Today", "Yesterday", "Earlier"];
+  for (const s of f) {
+    const g = dayGroup(s.started_at || 0);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(s);
+  }
+
+  for (const gName of order) {
+    const items = groups.get(gName);
+    if (!items || !items.length) continue;
+    const head = document.createElement("div");
+    head.className = "s-time";
+    head.textContent = gName;
+    list.appendChild(head);
+    for (const s of items) {
+      const row = document.createElement("div");
+      row.className = "sess-row" + (s.id === state.activeId ? " active" : "");
+      const sub = sessionSubtitle(s);
+      const subHtml = sub.text
+        ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "";
+      row.innerHTML =
+        `<div class="sess-icon">${s.state === "busy" ? "◐" : "+"}</div>` +
+        `<div class="sess-body">` +
+          `<div class="sess-title">${escapeHtml(cleanTitle(s.name))}</div>` +
+          subHtml +
+        `</div>` +
+        `<button class="sess-more" aria-label="Session actions">⋯</button>`;
+      row.addEventListener("click", () => select(s.id));
+      row.querySelector(".sess-more").addEventListener("click", (e) => {
+        e.stopPropagation(); rowMenu(s, e.currentTarget);
+      });
+      list.appendChild(row);
+    }
+  }
+}
 
 // Relative time for the session list. Runs in the browser, so Date is available
 // (the workflow-sandbox caveat elsewhere doesn't apply).
@@ -1520,7 +1562,7 @@ function select(id) {
   // once; the live turn_stopped clears it.
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
-  closeDrawer();
+  showChat();
 }
 
 // =================== composer ===================
@@ -1563,23 +1605,24 @@ function doSend() {
   send({ op: "send", sessionId: state.activeId, content: text });
 }
 
-// =================== drawer ===================
-$("drawerBtn").addEventListener("click", openDrawer);
-$("drawerClose").addEventListener("click", closeDrawer);
-$("drawerMask").addEventListener("click", closeDrawer);
+// =================== navigation ===================
+$("backBtn").addEventListener("click", showSessions);
 $("newBtn").addEventListener("click", newSession);
-$("newSessionBtn").addEventListener("click", newSession);
 $("refreshBtn").addEventListener("click", () => send({ op: "refresh" }));
+$("searchBtn").addEventListener("click", () => {
+  const wrap = $("searchWrap");
+  const hidden = wrap.classList.toggle("hidden");
+  if (!hidden) $("search").focus();
+  else { $("search").value = ""; renderSessions(); }
+});
 $("search").addEventListener("input", renderSessions);
-function openDrawer() { $("drawer").classList.add("show"); $("drawerMask").classList.add("show"); }
-function closeDrawer() { $("drawer").classList.remove("show"); $("drawerMask").classList.remove("show"); }
+
 function newSession() {
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
   if (state.pendingCwd) opts.cwd = state.pendingCwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   send({ op: "create", opts });
-  closeDrawer();
 }
 
 // suggestions
