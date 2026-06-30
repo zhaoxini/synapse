@@ -402,11 +402,34 @@ function cardEl(kind, icon, name, sub, bodyText, status) {
     `<span class="chev">▸</span>`;
   const body = document.createElement("div");
   body.className = "card-body";
-  body.textContent = bodyText || "";
+  const txt = bodyText || "";
+  const lines = txt.split("\n");
+  if (lines.length > CODE_FOLD_LINES + 2) {
+    // long tool output: clamp + "Show more" inside the (already expandable) card
+    const pre = document.createElement("div");
+    pre.className = "card-pre foldable-body";
+    pre.style.setProperty("--fold-lines", String(CODE_FOLD_LINES));
+    pre.textContent = txt;
+    const toggle = document.createElement("button");
+    toggle.className = "code-fold";
+    const hidden = lines.length - CODE_FOLD_LINES;
+    const setLabel = () => {
+      toggle.textContent = pre.classList.contains("expanded")
+        ? "Show less" : `Show ${hidden} more lines`;
+    };
+    setLabel();
+    toggle.addEventListener("click", () => { pre.classList.toggle("expanded"); setLabel(); });
+    body.appendChild(pre); body.appendChild(toggle);
+  } else {
+    body.textContent = txt;
+  }
   card.appendChild(head); card.appendChild(body);
   head.addEventListener("click", () => card.classList.toggle("open"));
   return card;
 }
+
+// Lines beyond this collapse behind a "Show N more lines" toggle.
+const CODE_FOLD_LINES = 14;
 
 function codeCard(lang, code, idx) {
   const card = document.createElement("div");
@@ -429,6 +452,26 @@ function codeCard(lang, code, idx) {
   pre.appendChild(codeEl);
   try { hljs.highlightElement(codeEl); } catch {}
   card.appendChild(head); card.appendChild(pre);
+
+  // Fold long code: clamp to N lines, reveal the rest with a toggle.
+  const total = code.split("\n").length;
+  if (total > CODE_FOLD_LINES + 2) {
+    card.classList.add("foldable");
+    pre.style.setProperty("--fold-lines", String(CODE_FOLD_LINES));
+    const hidden = total - CODE_FOLD_LINES;
+    const toggle = document.createElement("button");
+    toggle.className = "code-fold";
+    const setLabel = () => {
+      toggle.textContent = card.classList.contains("expanded")
+        ? "Show less" : `Show ${hidden} more lines`;
+    };
+    setLabel();
+    toggle.addEventListener("click", () => {
+      card.classList.toggle("expanded");
+      setLabel();
+    });
+    card.appendChild(toggle);
+  }
   return card;
 }
 
