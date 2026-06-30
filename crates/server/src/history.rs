@@ -90,6 +90,64 @@ async fn load_from(path: &Path, session_id: &str, limit: usize) -> (Vec<Value>, 
     (events, found)
 }
 
+/// First user-typed message in a transcript, used as a session-list title so
+/// the list shows what each session is about instead of a generic name. Reads
+/// line-by-line and stops at the first real prompt (transcripts can be large).
+/// Skips tool-result frames (no text) and system-injected envelopes (`<...>`).
+pub async fn first_user_text(cwd: &str, session_id: &str) -> Option<String> {
+    use tokio::io::AsyncBufReadExt;
+    let file = tokio::fs::File::open(transcript_path(cwd, session_id))
+        .await
+        .ok()?;
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let evt: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if evt.get("type").and_then(|v| v.as_str()) != Some("user") {
+            continue;
+        }
+        if evt.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
+        let content = evt.get("message").and_then(|m| m.get("content"));
+        let text = match content {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(a)) => a
+                .iter()
+                .filter_map(|b| {
+                    if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        b.get("text").and_then(|t| t.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => continue,
+        };
+        let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        // ponytail: skip system-injected reminders / slash-command envelopes; the
+        // first real prompt is the title. A prompt that's only an envelope yields
+        // no title and the caller falls back to "New session".
+        if t.is_empty() || t.starts_with('<') {
+            continue;
+        }
+        let head: String = t.chars().take(60).collect();
+        return Some(if t.chars().count() > 60 {
+            format!("{}…", head.trim_end())
+        } else {
+            head
+        });
+    }
+    None
+}
+
 /// Inline normalize helper used when building a client-facing history payload.
 pub fn _shape_session(_obj: &Map<String, Value>) -> Value {
     Value::Null

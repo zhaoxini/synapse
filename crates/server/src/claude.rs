@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -52,7 +53,11 @@ pub struct ClaudeSession {
     pub id: String,
     pub cwd: PathBuf,
     pub name: Option<String>,
-    pub model: Option<String>,
+    /// Selected model id passed to `--model` (empty/None = Claude Code default).
+    /// Behind a sync mutex so it can be switched mid-session; the next turn's
+    /// `base_args` reads the latest value. ponytail: std Mutex, only ever
+    /// lock+clone (never held across `.await`).
+    pub model: std::sync::Mutex<Option<String>>,
     pub permission_mode: Option<String>,
     pub agent: Option<String>,
     pub bin: ClaudeBin,
@@ -86,7 +91,7 @@ impl ClaudeSession {
             id,
             cwd,
             name,
-            model,
+            model: std::sync::Mutex::new(model),
             permission_mode,
             agent,
             bin,
@@ -94,6 +99,17 @@ impl ClaudeSession {
             state: tokio::sync::Mutex::new(SessionState::Idle),
             child: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Current model id, if any. Empty selection is stored as `None`.
+    pub fn model(&self) -> Option<String> {
+        self.model.lock().unwrap().clone()
+    }
+
+    /// Switch the model. Takes effect on the next turn (each turn re-spawns
+    /// `claude -p --model … --resume`), so a running turn is unaffected.
+    pub fn set_model(&self, model: Option<String>) {
+        *self.model.lock().unwrap() = model.filter(|s| !s.is_empty());
     }
 
     fn base_args(&self, streaming: bool, cc_sid: &Option<String>) -> Vec<String> {
@@ -112,9 +128,9 @@ impl ClaudeSession {
             args.push("--permission-mode".into());
             args.push(m.clone());
         }
-        if let Some(m) = &self.model {
+        if let Some(m) = self.model.lock().unwrap().clone() {
             args.push("--model".into());
-            args.push(m.clone());
+            args.push(m);
         }
         if let Some(a) = &self.agent {
             args.push("--agent".into());
@@ -131,6 +147,7 @@ impl ClaudeSession {
     /// substantive events produced. Tries stream-json first; falls back to
     /// buffered json if the gateway emits nothing.
     pub async fn run_turn(&self, content: &str, tx: &mpsc::Sender<Value>) -> usize {
+        let t0 = Instant::now();
         *self.state.lock().await = SessionState::Busy;
         let _ = tx
             .send(serde_json::json!({
@@ -139,8 +156,10 @@ impl ClaudeSession {
             .await;
 
         let cc = self.cc_session_id.lock().await.clone();
+        tracing::info!(session_id = %self.id, cc_sid = ?cc, content_len = content.len(), "turn started");
         let produced = self.exec_turn(content, true, &cc, tx).await;
         let produced = if produced == 0 {
+            tracing::info!(session_id = %self.id, "stream-json yielded nothing, falling back to json");
             let _ = tx
                 .send(serde_json::json!({
                     "type": "system", "subtype": "fallback_to_json", "sessionId": self.id
@@ -151,11 +170,40 @@ impl ClaudeSession {
             produced
         };
 
-        *self.state.lock().await = if produced > 0 {
-            SessionState::Idle
-        } else {
-            SessionState::Error
-        };
+        let failed = produced == 0;
+        if failed {
+            // The subprocess produced no conversational output (spawn failure,
+            // immediate crash, or a fatal provider/auth error). Emit an
+            // explicit error line so the client can surface it instead of
+            // spinning forever, then signal the turn is over.
+            let _ = tx
+                .send(serde_json::json!({
+                    "type": "stderr", "sessionId": self.id,
+                    "text": "Turn failed: the Claude CLI produced no output (check auth, API key, and that the gateway/model is reachable)."
+                }))
+                .await;
+            let _ = tx
+                .send(serde_json::json!({
+                    "type": "system", "subtype": "bridge_error",
+                    "sessionId": self.id,
+                    "error": "no output from Claude CLI"
+                }))
+                .await;
+        }
+        tracing::info!(
+            session_id = %self.id,
+            produced,
+            elapsed_ms = t0.elapsed().as_millis(),
+            failed,
+            "turn finished"
+        );
+        // Always terminate the turn so the client leaves the busy state.
+        let _ = tx
+            .send(serde_json::json!({
+                "type": "system", "subtype": "turn_stopped", "sessionId": self.id
+            }))
+            .await;
+        *self.state.lock().await = if failed { SessionState::Error } else { SessionState::Idle };
         produced
     }
 
@@ -177,6 +225,7 @@ impl ClaudeSession {
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
+                tracing::error!(session_id = %self.id, error = %e, "failed to spawn claude");
                 let _ = tx
                     .send(serde_json::json!({
                         "type": "system", "subtype": "bridge_error",
@@ -219,7 +268,7 @@ impl ClaudeSession {
         let produced = if streaming {
             self.read_stream(cell.clone(), tx).await
         } else {
-            self.read_json(cell.clone(), content, tx).await
+            self.read_json(cell.clone(), tx).await
         };
         // clear the handle slot now that the turn is done
         {
@@ -289,7 +338,6 @@ impl ClaudeSession {
     async fn read_json(
         &self,
         cell: Arc<tokio::sync::Mutex<Option<Child>>>,
-        content: &str,
         tx: &mpsc::Sender<Value>,
     ) -> usize {
         let (mut stdout, stderr) = {
@@ -310,15 +358,13 @@ impl ClaudeSession {
             let _ = c.wait().await;
         }
 
-        // echo the user turn (json mode doesn't return it)
-        let _ = tx
-            .send(serde_json::json!({
-                "type": "user", "sessionId": self.id,
-                "message": { "role": "user", "content": [ { "type": "text", "text": content } ] }
-            }))
-            .await;
+        // The user echo is broadcast once by the manager on send (so every
+        // device sees it); the json path no longer re-emits it here.
 
-        let mut produced = 1usize;
+        // Count only substantive ingest events (assistant/result/progress).
+        // Do not pre-seed with 1: the echoed user turn is not model output, and
+        // pre-seeding masks total failures (empty/crashed subprocess) as success.
+        let mut produced = 0usize;
         if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&buf) {
             for evt in arr {
                 if self.ingest(&evt, tx).await {
@@ -346,12 +392,32 @@ impl ClaudeSession {
                 *self.cc_session_id.lock().await = Some(sid.to_string());
             }
         }
+        let produced = counts_as_produced(evt);
+        // Log errored result frames explicitly — these are the silent-failure cases.
+        if !produced && evt.get("type").and_then(|v| v.as_str()) == Some("result") {
+            tracing::warn!(
+                session_id = %self.id,
+                subtype = ?evt.get("subtype").and_then(|v| v.as_str()),
+                errors = ?evt.get("errors"),
+                "errored result frame (turn will not count as produced)"
+            );
+        }
         let _ = tx.send(evt.clone()).await;
-        // count substantive events for fallback detection
-        matches!(
-            evt.get("type").and_then(|v| v.as_str()),
-            Some("assistant") | Some("result") | Some("user") | Some("progress")
-        )
+        produced
+    }
+}
+
+/// Whether a forwarded event counts as substantive model output for the
+/// stream→json fallback / failure detection. An *errored* `result` frame
+/// (e.g. `subtype:"error_during_execution"`, or `is_error:true` such as
+/// "No conversation found with session ID") is NOT output: counting it would
+/// suppress the bridge_error fallback and leave the client with a silent,
+/// response-less turn.
+fn counts_as_produced(evt: &Value) -> bool {
+    match evt.get("type").and_then(|v| v.as_str()) {
+        Some("assistant") | Some("user") | Some("progress") => true,
+        Some("result") => evt.get("is_error").and_then(|v| v.as_bool()) != Some(true),
+        _ => false,
     }
 }
 
@@ -372,6 +438,38 @@ async fn forward_stderr<R: AsyncReadExt + Unpin>(
 
 pub fn new_session_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn errored_result_does_not_count_as_produced() {
+        // The exact frame seen for an unresumable session.
+        let evt = json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": true,
+            "errors": ["No conversation found with session ID: 5e993469"],
+        });
+        assert!(!counts_as_produced(&evt));
+    }
+
+    #[test]
+    fn ok_result_and_assistant_count_as_produced() {
+        assert!(counts_as_produced(&json!({"type":"result","is_error":false})));
+        assert!(counts_as_produced(&json!({"type":"result"})));
+        assert!(counts_as_produced(&json!({"type":"assistant"})));
+        assert!(counts_as_produced(&json!({"type":"user"})));
+    }
+
+    #[test]
+    fn non_substantive_frames_do_not_count() {
+        assert!(!counts_as_produced(&json!({"type":"system","subtype":"init"})));
+        assert!(!counts_as_produced(&json!({"type":"stderr","text":"x"})));
+    }
 }
 
 // ---- `claude agents --json` discovery ----

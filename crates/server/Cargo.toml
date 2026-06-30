@@ -13,7 +13,8 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-appender = "0.2"
 uuid.workspace = true
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }

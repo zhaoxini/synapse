@@ -5,7 +5,7 @@
 // Slint `a-b` subtraction ambiguity. Property/callback names are a stable
 // contract with crates/app/src/main.rs and must not change shape.
 
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 
 global Theme {
     // ChatGPT mobile palette (light theme).
@@ -48,6 +48,8 @@ struct MsgBlock {
     toolId: string,
     codeLang: string,
     time: string,
+    messageId: string,
+    blockIndex: int,
 }
 
 export component App inherits Window {
@@ -58,14 +60,16 @@ export component App inherits Window {
 
     in-out property <string> view: "pairing";
     in-out property <bool> drawerOpen: false;
-    in-out property <string> pairingHost: "127.0.0.1";
-    in-out property <string> pairingPort: "4173";
+    in-out property <string> pairingHost: "";
+    in-out property <string> pairingPort: "";
     in-out property <string> pairingToken;
     in-out property <bool> pairingTls: false;
     in-out property <string> pairingError;
     in-out property <bool> connecting: false;
     // Pair-with-QR sheet state.
     in-out property <bool> showPairSheet: false;
+    // Collapsible manual (advanced) connection on the pairing screen.
+    in-out property <bool> showManual: false;
     in-out property <string> pairLinkText;
 
     in-out property <[SessionInfo]> sessions: [];
@@ -88,6 +92,9 @@ export component App inherits Window {
     in-out property <bool> showToast: false;
     // Index of the message whose code block was just copied (-1 = none). Drives the "Copied!" flash.
     in-out property <int> copiedIndex: -1;
+    // Keyboard height (points) on iOS; 0 on desktop. Set from Rust via the UIKit
+    // keyboard-frame observer so the composer rides above the on-screen keyboard.
+    in-out property <length> keyboardInset: 0px;
 
     callback pairClicked(string);
     callback connectClicked();
@@ -102,170 +109,193 @@ export component App inherits Window {
     callback suggestionClicked(string);
     callback copyText(int, string);
     callback drawerFilterChanged(string);
+    // Paste pairing link from clipboard (mobile: after scanning QR with camera).
+    callback pasteClicked();
+    // Tracks whether the clipboard appears to contain a synapse:// link.
+    in-out property <bool> clipboardHasLink: false;
 
-    // ===== Pairing view (login screen) =====
-    if root.view == "pairing" : VerticalLayout {
-        alignment: center;
-        spacing: 16px;
-        padding: 32px;
-        Rectangle {
-            height: 72px;
-            HorizontalLayout { alignment: center;
-                Rectangle {
-                    width: 64px; height: 64px; border-radius: 32px;
-                    background: Theme.accent;
-                    Text { text: "✦"; color: #ffffff; font-size: 30px; horizontal-alignment: center; vertical-alignment: center; }
-                }
-            }
-        }
-        Text { text: "Welcome to Synapse"; font-size: 22px; font-weight: 700; color: Theme.text; horizontal-alignment: center; }
-        Text {
-            text: "Connect to a Synapse server running Claude Code on your machine.";
-            font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
-        }
+    if root.view == "pairing" : ScrollView {
         VerticalLayout {
-            spacing: 10px; padding-top: 12px;
-            Rectangle {
-                height: 50px;
-                background: Theme.bgElev;
-                border-radius: Theme.radiusSm;
-                border-width: 1px;
-                border-color: Theme.border;
-                LineEdit {
-                    placeholder-text: "Host (192.168.1.6)";
-                    edited => { root.pairingHost = self.text; }
-                }
-            }
-            Rectangle {
-                height: 50px;
-                background: Theme.bgElev;
-                border-radius: Theme.radiusSm;
-                border-width: 1px;
-                border-color: Theme.border;
-                LineEdit {
-                    placeholder-text: "Port (4173)";
-                    edited => { root.pairingPort = self.text; }
-                }
-            }
-            Rectangle {
-                height: 50px;
-                background: Theme.bgElev;
-                border-radius: Theme.radiusSm;
-                border-width: 1px;
-                border-color: Theme.border;
-                LineEdit {
-                    placeholder-text: "Pairing code";
-                    edited => { root.pairingToken = self.text; }
-                }
-            }
-            // TLS toggle — enable for secure remote (wss://) connections.
-            HorizontalLayout {
-                padding-left: 4px; padding-right: 4px;
-                spacing: 8px;
-                Text {
-                    text: "Secure connection (wss/TLS)";
-                    font-size: 14px; color: Theme.textDim;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                Rectangle {
-                    width: 46px; height: 28px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 14px;
-                    background: root.pairingTls ? Theme.accent : Theme.bgElev2;
-                    TouchArea { clicked => { root.pairingTls = !root.pairingTls; } }
-                    Rectangle {
-                        width: 22px; height: 22px; border-radius: 11px;
-                        y: (parent.height - self.height) / 2;
-                        x: root.pairingTls ? parent.width - self.width - 3px : 3px;
-                        background: #ffffff;
-                        animate x { duration: 120ms; }
-                    }
-                }
-            }
-        }
-        Text { text: root.pairingError; color: Theme.danger; font-size: 13px; horizontal-alignment: center; }
-        Rectangle {
-            height: 50px;
-            border-radius: Theme.radiusSm;
-            background: root.connecting ? Theme.accentDim : Theme.accent;
-            TouchArea { clicked => { root.connectClicked(); } }
-            Text {
-                text: root.connecting ? "Connecting…" : "Continue";
-                color: #ffffff; font-weight: 600; font-size: 16px;
-                horizontal-alignment: center; vertical-alignment: center;
-            }
-        }
-        // Quick pair: scan / paste the server's pairing link.
-        Rectangle {
-            height: 44px;
-            TouchArea { clicked => { root.showPairSheet = true; } }
-            HorizontalLayout {
-                alignment: center;
-                Text {
-                    text: "Pair with QR / link";
-                    color: Theme.textDim; font-size: 14px; font-weight: 600;
-                    vertical-alignment: center;
-                }
-            }
-        }
-    }
+            alignment: start;
+            spacing: 18px;
+            padding: 32px;
+            padding-top: 64px;
 
-    // ===== Pair-with-QR overlay (shown over the pairing screen) =====
-    if root.showPairSheet : Rectangle {
-        background: Theme.overlay;
-        TouchArea {
-            // tapping the backdrop closes the sheet (but not the text area)
-            clicked => { root.showPairSheet = false; }
-        }
-        Rectangle {
-            width: min(root.width - 48px, 360px);
-            height: sheetCol.preferred-height + 40px;
-            x: (root.width - self.width) / 2;
-            y: (root.height - self.height) / 2;
-            border-radius: Theme.radius;
-            background: Theme.bg;
-            sheetCol := VerticalLayout {
-                padding: 22px; spacing: 14px;
-                HorizontalLayout {
-                    Text {
-                        text: "Pair a device";
-                        font-size: 18px; font-weight: 700; color: Theme.text;
-                        horizontal-stretch: 1;
-                    }
+            // Brand mark
+            Rectangle {
+                height: 80px;
+                HorizontalLayout { alignment: center;
                     Rectangle {
-                        width: 28px; height: 28px; border-radius: 14px;
-                        background: Theme.bgElev;
-                        TouchArea { clicked => { root.showPairSheet = false; } }
-                        Text { text: "✕"; font-size: 14px; color: Theme.textDim; horizontal-alignment: center; vertical-alignment: center; }
+                        width: 72px; height: 72px; border-radius: 36px;
+                        background: Theme.accent;
+                        Text { text: "✦"; color: #ffffff; font-size: 34px; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
+            }
+            Text { text: "Synapse"; font-size: 26px; font-weight: 800; color: Theme.text; horizontal-alignment: center; }
+            Text {
+                text: "Scan the QR code on your computer's\nSynapse server, or enter the pairing code.";
+                font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
+            }
+
+            // ===== Primary entry: pairing code / link =====
+            Rectangle {
+                height: 56px;
+                background: Theme.bgElev;
+                border-radius: Theme.radiusSm;
+                border-width: 1px;
+                border-color: Theme.border;
+                LineEdit {
+                    placeholder-text: "Pairing code or synapse:// link";
+                    text: root.pairLinkText;
+                    edited => { root.pairLinkText = self.text; }
+                    accepted => { root.pairClicked(root.pairLinkText); }
+                }
+            }
+            Rectangle {
+                height: 52px;
+                border-radius: Theme.radiusSm;
+                background: root.connecting ? Theme.accentDim : Theme.accent;
+                TouchArea { clicked => { root.pairClicked(root.pairLinkText); } }
                 Text {
-                    text: "Run synapse-server — it prints a QR. Scan it with any QR app to copy the synapse:// link, paste it below, and Pair.";
-                    font-size: 13px; color: Theme.textDim; wrap: word-wrap;
+                    text: root.connecting ? "Connecting…" : "Connect";
+                    color: #ffffff; font-weight: 700; font-size: 16px;
+                    horizontal-alignment: center; vertical-alignment: center;
                 }
-                Rectangle {
-                    height: 52px;
-                    background: Theme.bgElev;
-                    border-radius: Theme.radiusSm;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    LineEdit {
-                        placeholder-text: "synapse://host:port?token=…";
-                        text: root.pairLinkText;
-                        edited => { root.pairLinkText = self.text; }
-                        accepted => { root.pairClicked(root.pairLinkText); }
+            }
+            // Paste-from-clipboard helper (scan QR with system camera, then tap here)
+            if root.clipboardHasLink : Rectangle {
+                height: 40px;
+                border-radius: Theme.radiusSm;
+                background: Theme.bgElev2;
+                TouchArea { clicked => { root.pasteClicked(); } }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    Text { text: "📋"; font-size: 14px; vertical-alignment: center; }
+                    Text {
+                        text: "Paste link from clipboard";
+                        color: Theme.text; font-size: 13px; font-weight: 600;
+                        vertical-alignment: center;
                     }
                 }
-                Rectangle {
-                    height: 46px;
-                    border-radius: Theme.radiusSm;
-                    background: Theme.accent;
-                    TouchArea { clicked => { root.pairClicked(root.pairLinkText); } }
+            }
+            Text { text: root.pairingError; color: Theme.danger; font-size: 13px; horizontal-alignment: center; }
+
+            // Hint card
+            Rectangle {
+                border-radius: Theme.radiusSm;
+                background: Theme.bgElev;
+                border-width: 1px;
+                border-color: Theme.border;
+                height: hintCol.preferred-height + 28px;
+                hintCol := VerticalLayout {
+                    padding: 14px; spacing: 6px;
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: "📱"; font-size: 16px; vertical-alignment: center; }
+                        Text { text: "How to pair"; font-size: 14px; font-weight: 700; color: Theme.text; vertical-alignment: center; }
+                    }
                     Text {
-                        text: "Pair";
-                        color: #ffffff; font-weight: 600; font-size: 16px;
-                        horizontal-alignment: center; vertical-alignment: center;
+                        text: "1. Run synapse-server on your computer\n2. It prints a QR code in the terminal\n3. Scan it with your phone camera\n4. Tap \"Paste link from clipboard\" above\n\nOr type the pairing code directly.";
+                        font-size: 12.5px; color: Theme.textDim; wrap: word-wrap;
+                    }
+                }
+            }
+
+            // ===== Collapsible manual (advanced) connection =====
+            Rectangle {
+                height: manualCol.preferred-height;
+                manualCol := VerticalLayout {
+                    spacing: 0px;
+                    Rectangle {
+                        height: 44px;
+                        HorizontalLayout {
+                            padding-left: 4px; padding-right: 4px;
+                            Text {
+                                text: root.showManual ? "▾" : "▸";
+                                font-size: 12px; color: Theme.textDim; vertical-alignment: center;
+                            }
+                            Text {
+                                text: "Manual connection (advanced)";
+                                color: Theme.textDim; font-size: 14px; font-weight: 600;
+                                vertical-alignment: center; horizontal-stretch: 1;
+                            }
+                        }
+                        TouchArea { clicked => { root.showManual = !root.showManual; } }
+                    }
+                    if root.showManual : VerticalLayout {
+                        spacing: 10px; padding-top: 4px;
+                        Rectangle {
+                            height: 50px;
+                            background: Theme.bgElev;
+                            border-radius: Theme.radiusSm;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            LineEdit {
+                                placeholder-text: "Host (192.168.1.6)";
+                                text: root.pairingHost;
+                                edited => { root.pairingHost = self.text; }
+                            }
+                        }
+                        Rectangle {
+                            height: 50px;
+                            background: Theme.bgElev;
+                            border-radius: Theme.radiusSm;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            LineEdit {
+                                placeholder-text: "Port (4173)";
+                                text: root.pairingPort;
+                                edited => { root.pairingPort = self.text; }
+                            }
+                        }
+                        Rectangle {
+                            height: 50px;
+                            background: Theme.bgElev;
+                            border-radius: Theme.radiusSm;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            LineEdit {
+                                placeholder-text: "Pairing token";
+                                text: root.pairingToken;
+                                edited => { root.pairingToken = self.text; }
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: 4px; padding-right: 4px;
+                            spacing: 8px;
+                            Text {
+                                text: "Secure connection (wss/TLS)";
+                                font-size: 14px; color: Theme.textDim;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Rectangle {
+                                width: 46px; height: 28px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 14px;
+                                background: root.pairingTls ? Theme.accent : Theme.bgElev2;
+                                TouchArea { clicked => { root.pairingTls = !root.pairingTls; } }
+                                Rectangle {
+                                    width: 22px; height: 22px; border-radius: 11px;
+                                    y: (parent.height - self.height) / 2;
+                                    x: root.pairingTls ? parent.width - self.width - 3px : 3px;
+                                    background: #ffffff;
+                                    animate x { duration: 120ms; }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 46px;
+                            border-radius: Theme.radiusSm;
+                            background: Theme.bgElev2;
+                            TouchArea { clicked => { root.connectClicked(); } }
+                            Text {
+                                text: "Connect manually";
+                                color: Theme.text; font-weight: 600; font-size: 15px;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                        }
                     }
                 }
             }
@@ -482,6 +512,51 @@ export component App inherits Window {
                             }
                         }
                     }
+                    // ---- Thinking row (collapsible, default-collapsed) ----
+                    thinkRect := Rectangle {
+                        visible: msg.kind == "thinking";
+                        height: msg.expanded ? thinkBody.preferred-height + 52px : 44px;
+                        border-radius: Theme.radiusSm;
+                        background: Theme.bgElev;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            padding: 0px; spacing: 0px;
+                            Rectangle {
+                                height: 44px;
+                                TouchArea { clicked => { root.toggleTool(i); } }
+                                HorizontalLayout {
+                                    padding-left: 14px; padding-right: 14px; spacing: 10px;
+                                    Rectangle {
+                                        width: 22px; height: 22px; border-radius: 6px;
+                                        y: (parent.height - self.height) / 2;
+                                        background: Theme.bgElev2;
+                                        Text { text: "💭"; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                    Text {
+                                        text: "Thinking";
+                                        font-weight: 600; font-size: 14px; color: Theme.textDim;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                    Text {
+                                        text: msg.expanded ? "▾" : "▸";
+                                        font-size: 12px; color: Theme.textFaint;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                visible: msg.expanded;
+                                clip: true;
+                                thinkBody := Text {
+                                    text: msg.text;
+                                    font-size: 13px; color: Theme.textDim; wrap: word-wrap;
+                                    x: 14px; y: 4px;
+                                    width: parent.width - 28px;
+                                }
+                            }
+                        }
+                    }
                     // ---- Code block (ChatGPT-style dark card) ----
                     codeRect := Rectangle {
                         visible: msg.kind == "code";
@@ -540,9 +615,36 @@ export component App inherits Window {
                             }
                         }
                     }
+                    // ---- Error card (stderr / bridge_error / rate limits) ----
+                    errRect := Rectangle {
+                        visible: msg.kind == "error";
+                        border-radius: Theme.radiusSm;
+                        background: #2a1416;
+                        border-width: 1px;
+                        border-color: Theme.danger;
+                        height: errBody.preferred-height + 24px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 12px;
+                            spacing: 8px;
+                            Text {
+                                text: "⚠";
+                                color: Theme.danger;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+                            errBody := Text {
+                                text: msg.text;
+                                font-size: 13px;
+                                color: #f0b5b5;
+                                wrap: word-wrap;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
                     // ---- Text rows ----
                     textRect := VerticalLayout {
-                        visible: msg.kind != "tool" && msg.kind != "code";
+                        visible: msg.kind != "tool" && msg.kind != "code" && msg.kind != "error" && msg.kind != "thinking";
                         spacing: 6px;
                         HorizontalLayout {
                             spacing: 10px;
@@ -628,12 +730,12 @@ export component App inherits Window {
             }
         }
 
-        // floating composer
+        // floating composer — rides above the keyboard via keyboardInset.
         Rectangle {
-            height: 64px;
+            height: 64px + root.keyboardInset;
             background: Theme.bg;
             VerticalLayout {
-                padding: 8px; padding-bottom: 10px;
+                padding: 8px; padding-bottom: 10px + root.keyboardInset;
                 Rectangle {
                     height: 48px;
                     border-radius: 24px;

@@ -177,11 +177,12 @@ synapse://<host>:<port>?token=<TOKEN>&tls=<0|1>
 The host defaults to this machine's auto-detected LAN IP (override with
 `--pair-host`). To bind your phone:
 
-1. On the pairing screen, tap **"Pair with QR / link"**.
+1. On the pairing screen, the main field accepts a pairing code or `synapse://` link.
 2. Scan the terminal QR with any QR app (the camera app, a scanner, etc.) to
    copy the `synapse://…` link.
-3. Paste it into the field and tap **Pair** — the app fills in host, port,
-   token, and the TLS toggle, then connects automatically.
+3. Paste it into the field (or tap **"Paste link from clipboard"** if the
+   clipboard has a link) and tap **Connect** — the app parses the link and
+   connects automatically.
 
 The manual host/port/token fields are still available for typing connection
 details by hand.
@@ -387,7 +388,7 @@ remaining platform-integration step.
 
 - The server prints a scannable QR (and a `synapse://host:port?token&tls` link)
   on startup, auto-detecting the LAN IP for the QR host.
-- The app has a **"Pair with QR / link"** flow that parses the link, fills the
+- The app has a **scan-and-connect** flow that parses the link, fills the
   pairing fields, and connects in one step (parser covered by unit tests).
 
 ### Attach-to-existing sessions

@@ -309,22 +309,9 @@ pub fn run_app() -> anyhow::Result<()> {
             if sid.is_empty() {
                 return;
             }
-            // optimistic local render
-            let mut v: Vec<MsgBlock> = app.get_messages().iter().collect();
-            v.push(MsgBlock {
-                kind: "text".into(),
-                role: "user".into(),
-                text: text.clone(),
-                toolName: "".into(),
-                toolStatus: "".into(),
-                expanded: false,
-                toolId: "".into(),
-                codeLang: "".into(),
-                time: now_time().into(),
-                messageId: "".into(),
-                blockIndex: 0,
-            });
-            app.set_messages(model_rc(v));
+            // No optimistic echo: the server broadcasts the user message to every
+            // device viewing this session, and we render it from that broadcast
+            // (append_live_user) — so all devices show an identical transcript.
             app.set_composerText("".into());
             app.set_busy(true);
             let msg =
@@ -383,6 +370,7 @@ pub fn run_app() -> anyhow::Result<()> {
                 // drop any in-flight streaming scratch from the previous session
                 STREAM.with(|cell| cell.borrow_mut().reset());
                 // update the header to reflect the newly-selected session
+                app.set_busy(false); // default; overridden below if the session is busy
                 let all = app.get_allSessions();
                 if let Some(s) = all.iter().find(|s| s.id == sid.as_str()) {
                     app.set_activeSessionName(s.name.clone());
@@ -393,6 +381,11 @@ pub fn run_app() -> anyhow::Result<()> {
                     };
                     app.set_activeSessionSub(sub.into());
                     app.set_activeState(s.state.clone().into());
+                    // Seed busy from the session's current state so opening a
+                    // session whose turn is already running (started on another
+                    // device) shows the replying status at once; the live
+                    // turn_stopped clears it.
+                    app.set_busy(s.state == "busy");
                 }
             }
             let msg =
@@ -719,7 +712,30 @@ fn apply_sessions(app: &App, sessions: Vec<SessionInfo>) {
     };
     app.set_sessions(model_rc(filtered));
 }
- 
+
+/// Update one session's running state in the cached list from a turn_started/
+/// turn_stopped/bridge_error broadcast for ANY session, so the drawer state and
+/// busy-on-open reflect turns started on other devices. No-op if unchanged.
+fn set_session_state(app: &App, sid: &str, st: &str) {
+    if sid.is_empty() {
+        return;
+    }
+    let mut sessions: Vec<SessionInfo> = app.get_allSessions().iter().collect();
+    let mut changed = false;
+    for s in sessions.iter_mut() {
+        if s.id == sid {
+            if s.state != st {
+                s.state = st.into();
+                changed = true;
+            }
+            break;
+        }
+    }
+    if changed {
+        apply_sessions(app, sessions);
+    }
+}
+
 /// If no session is active yet and sessions are available, select the first
 /// one in the header (name + subtitle + state) so the user has immediate
 /// context instead of a blank chat. The transcript is fetched lazily on the
@@ -1129,12 +1145,59 @@ fn truncate(s: &str, n: usize) -> String {
 /// streaming-aware path: `stream_event` deltas are parsed into `STREAM` and
 /// flushed incrementally; the final `assistant` frame reconciles (de-dups).
 fn dispatch_event(app: &App, evt: &serde_json::Value) {
-    // Ignore events scoped to a session that isn't the active view.
     let sid = evt.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
-    if !sid.is_empty() && sid != app.get_activeSessionId().as_str() {
+    let ty = evt.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let active = app.get_activeSessionId();
+    let is_active = sid.is_empty() || sid == active.as_str();
+
+    // Turn status is tracked for EVERY session (not just the open one) so the
+    // session list + busy-on-open reflect turns started on other devices. The
+    // open session additionally flips the live busy/typing state.
+    if ty == "system" {
+        match evt.get("subtype").and_then(|v| v.as_str()).unwrap_or("") {
+            "turn_started" => {
+                set_session_state(app, sid, "busy");
+                if is_active {
+                    app.set_busy(true);
+                    app.set_activeState("busy".into());
+                }
+            }
+            "turn_stopped" => {
+                set_session_state(app, sid, "idle");
+                if is_active {
+                    app.set_busy(false);
+                    app.set_activeState("idle".into());
+                    STREAM.with(|cell| cell.borrow_mut().reset());
+                }
+            }
+            "bridge_error" => {
+                set_session_state(app, sid, "error");
+                if is_active {
+                    let detail = evt
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("the Claude CLI produced no output");
+                    push_live_system_error(app, &format!("Turn failed: {}", detail));
+                    app.set_busy(false);
+                    app.set_activeState("error".into());
+                    app.set_toast("Turn failed — check CLI / API key".into());
+                }
+            }
+            "api_retry" => {
+                if is_active && app.get_busy() {
+                    app.set_toast("Upstream rate-limited — retrying…".into());
+                }
+            }
+            _ => {}
+        }
         return;
     }
-    let ty = evt.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    // All other events are transcript output for one session — render only when
+    // it's the session we're viewing.
+    if !is_active {
+        return;
+    }
     match ty {
         "stream_event" => {
             // Parse into state + mark dirty; the render timer flushes ~30x/sec.
@@ -1167,36 +1230,6 @@ fn dispatch_event(app: &App, evt: &serde_json::Value) {
                     cell.borrow_mut().reset();
                 }
             });
-            return;
-        }
-        "system" => {
-            match evt.get("subtype").and_then(|v| v.as_str()).unwrap_or("") {
-                "turn_started" => {
-                    app.set_busy(true);
-                    app.set_activeState("busy".into());
-                }
-                "turn_stopped" => {
-                    app.set_busy(false);
-                    app.set_activeState("idle".into());
-                    STREAM.with(|cell| cell.borrow_mut().reset());
-                }
-                "api_retry" => {
-                    if app.get_busy() {
-                        app.set_toast("Upstream rate-limited — retrying…".into());
-                    }
-                }
-                "bridge_error" => {
-                    let detail = evt
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("the Claude CLI produced no output");
-                    push_live_system_error(app, &format!("Turn failed: {}", detail));
-                    app.set_busy(false);
-                    app.set_activeState("error".into());
-                    app.set_toast("Turn failed — check CLI / API key".into());
-                }
-                _ => {}
-            }
             return;
         }
         "result" => {
@@ -1294,9 +1327,9 @@ fn assemble_assistant_blocks(message_id: &str, evt: &serde_json::Value) -> Vec<M
     out
 }
 
-/// Append a user-text block for a live `user` frame, de-duping against the last
-/// row if it already carries the same text (the optimistic local echo in
-/// on_sendClicked usually matches the server's echo).
+/// Append a user-text block for a live `user` frame. The server is the single
+/// source of the echo (broadcast once on send), so there is no optimistic local
+/// echo to de-dup against — render it directly.
 fn append_live_user(app: &App, evt: &serde_json::Value) {
     let text = evt
         .pointer("/message/content")
@@ -1323,16 +1356,6 @@ fn append_live_user(app: &App, evt: &serde_json::Value) {
     let Some(vm) = model.as_any().downcast_ref::<VecModel<MsgBlock>>() else {
         return;
     };
-    // De-dup: skip if the last row is already this user text.
-    let dup = vm
-        .row_count()
-        .checked_sub(1)
-        .and_then(|r| vm.row_data(r))
-        .map(|b| b.role == "user" && b.text == text.as_str())
-        .unwrap_or(false);
-    if dup {
-        return;
-    }
     vm.push(MsgBlock {
         kind: "text".into(),
         role: "user".into(),

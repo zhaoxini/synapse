@@ -96,11 +96,18 @@ async fn ws_handler(
 }
 
 async fn client_loop(state: AppState, socket: WebSocket) {
+    tracing::info!("ws client connected");
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // send hello
     let sessions = state.manager.list().await;
-    let hello = json!({ "type": "hello", "sessions": sessions });
+    let hello = json!({
+        "type": "hello",
+        "sessions": sessions,
+        "models": state.manager.catalog(),
+        "defaultModel": state.manager.default_model_id(),
+        "cwds": state.manager.cwds(),
+    });
     let _ = ws_tx.send(Message::Text(hello.to_string())).await;
 
     // subscribe to manager events
@@ -181,6 +188,7 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                         }
                     })
                     .unwrap_or_default();
+                tracing::info!(session_id = %sid, content_len = content.len(), op = "send");
                 if let Err(e) = state.manager.send(&sid, content).await {
                     let _ = out_tx
                         .send(Message::Text(
@@ -235,9 +243,25 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                         .await;
                 }
             }
+            "set_model" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let model = cmd.get("model").and_then(|v| v.as_str()).map(str::to_string);
+                if let Err(e) = state.manager.set_model(&sid, model).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"set_model"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
             _ => {}
         }
     }
     out_pump.abort();
     event_pump.abort();
+    tracing::info!("ws client disconnected");
 }

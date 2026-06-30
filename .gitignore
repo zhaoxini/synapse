@@ -6,6 +6,7 @@
 mobile/ios/Synapse.xcodeproj/project.xcworkspace/
 mobile/ios/Synapse.xcodeproj/xcuserdata/
 mobile/ios/build/
+mobile/ios/build_sim/
 *.ipa
 
 # Android

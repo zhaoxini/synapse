@@ -5,7 +5,6 @@
 // `synapse_ios_main` (declared in `lib.rs`) from the Objective-C app delegate.
 
 #[cfg(not(target_os = "ios"))]
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    synapse_app::run_app().await
+fn main() -> anyhow::Result<()> {
+    synapse_app::run_app()
 }

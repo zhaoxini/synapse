@@ -27,6 +27,7 @@ pub fn asset(path: &str) -> Option<&'static [u8]> {
         "vendor/marked.min.js" => include_bytes!("../web/vendor/marked.min.js"),
         "vendor/highlight.min.js" => include_bytes!("../web/vendor/highlight.min.js"),
         "vendor/github-dark.min.css" => include_bytes!("../web/vendor/github-dark.min.css"),
+        "vendor/github.min.css" => include_bytes!("../web/vendor/github.min.css"),
         _ => return None,
     })
 }

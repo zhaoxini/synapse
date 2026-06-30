@@ -26,6 +26,12 @@ const state = {
   busy: false,
   activeId: "",
   sessions: [],
+  models: [],          // model catalog from hello: [{id,label}]
+  defaultModel: "",    // pre-selected model id for new sessions
+  pendingModel: null,  // model chosen before a session exists; used on create
+  cwds: [],            // project working dirs from hello (git repos)
+  pendingCwd: null,    // project chosen for the next create
+  pendingSend: null,   // message queued while a new session is being created
   blocks: [],         // rendered message elements (for empty/clear bookkeeping)
   // The current assistant turn. Synara model: a turn's thinking + tool calls are
   // "work"; while running they show live, and once the turn settles they collapse
@@ -107,11 +113,22 @@ function send(obj) {
 // =================== inbound dispatch ===================
 function handle(v) {
   switch (v.type) {
-    case "hello": setSessions(v.sessions || []); break;
+    case "hello":
+      state.models = v.models || [];
+      state.defaultModel = v.defaultModel || "";
+      state.cwds = v.cwds || [];
+      setSessions(v.sessions || []);
+      syncModelLabel();
+      syncLocalLabel();
+      break;
     case "sessions": setSessions(v.sessions || []); break;
     case "created":
       setSessions(state.sessions); // list update follows via event
       select(v.session.id);
+      if (state.pendingSend) {
+        const t = state.pendingSend; state.pendingSend = null;
+        send({ op: "send", sessionId: v.session.id, content: t });
+      }
       break;
     case "sessions": break;
     case "history":
@@ -126,16 +143,29 @@ function handle(v) {
 
 function handleEvent(evt) {
   const t = evt.type;
-  if (typeof evt.ttft_ms === "number") state.msNow += 0; // (kept simple; elapsed uses counters below)
-  if (t === "system") {
-    const sub = evt.subtype;
-    if (sub === "session_created") { upsertSession(evt.session); }
-    else if (sub === "turn_started") { startTurn(); setBusy(true); }
-    else if (sub === "turn_stopped") { setBusy(false); finalizeStream(); }
-    else if (sub === "bridge_error") { pushError(str(evt.error) || "Turn failed"); setBusy(false); finalizeStream(); }
-    else if (sub === "fallback_to_json") { /* no-op */ }
+  const sub = evt.subtype;
+  // Multi-device: the server broadcasts every session's events to every client.
+  // Session lifecycle and turn status keep EVERY session's drawer state fresh
+  // (so the busy dot and busy-on-open reflect turns started on other devices);
+  // all other events are transcript output for one session and are dropped
+  // unless we're viewing that session.
+  if (t === "system" && (sub === "session_created" || sub === "session_updated")) {
+    upsertSession(evt.session);
+    if (sub === "session_updated" && evt.sessionId === state.activeId) syncModelLabel();
     return;
   }
+  if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
+    setSessionState(evt.sessionId, sub === "turn_started" ? "busy" : (sub === "bridge_error" ? "error" : "idle"));
+    if (evt.sessionId === state.activeId) {
+      if (sub === "turn_started") { startTurn(); setBusy(true); }
+      else if (sub === "turn_stopped") { setBusy(false); finalizeStream(); }
+      else { pushError(str(evt.error) || "Turn failed"); setBusy(false); finalizeStream(); }
+    }
+    return;
+  }
+  if (evt.sessionId && evt.sessionId !== state.activeId) return;
+  if (typeof evt.ttft_ms === "number") state.msNow += 0; // (kept simple; elapsed uses counters below)
+  if (t === "system") { /* api_retry / fallback_to_json: no-op for the open view */ return; }
   if (t === "assistant") { ingestAssistant(evt); return; }
   if (t === "user") {
     if (evt.message) {
@@ -569,13 +599,18 @@ function setBusy(b) {
   dot.classList.toggle("busy", b);
   updatePulse();
 }
-// The typing indicator shows whenever the turn is busy and no assistant TEXT is
-// streaming yet — before the first token, while thinking, and while a tool runs.
-// It sits at the end of the list (after any live work items).
+// The typing indicator shows while the turn is busy and working — before the
+// first token, while thinking, and while any tool runs. It hides only once the
+// FINAL answer is streaming (text present, no tool still running), where the
+// streaming text is itself the activity. It sits at the end of the list.
 let pulseEl = null;
 let tickTimer = null;
 function updatePulse() {
-  const show = state.busy && !(state.turn && state.turn.text);
+  // A mid-turn preamble ("Let me read the README…") followed by running tools must
+  // keep pulsing, so a running tool always forces the pulse on despite that text.
+  const tn = state.turn;
+  const toolRunning = tn && [...tn.tools.values()].some(t => t.status === "running");
+  const show = state.busy && (toolRunning || !(tn && tn.text));
   if (show) {
     if (!pulseEl) {
       pulseEl = document.createElement("div");
@@ -609,39 +644,102 @@ function upsertSession(s) {
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
   renderSessions();
 }
+// Track a session's running state from live turn_started/turn_stopped (broadcast
+// for every session) so the drawer dot and busy-on-open stay correct even for
+// turns started on another device.
+function setSessionState(id, st) {
+  const ses = state.sessions.find(x => x.id === id);
+  if (!ses || ses.state === st) return;
+  ses.state = st;
+  renderSessions();
+  if (id === state.activeId) dot.className = st === "busy" ? "busy" : (st === "error" ? "error" : "");
+}
 function renderSessions() {
   const q = $("search").value.toLowerCase();
   const list = $("sessionList");
   list.innerHTML = "";
-  const f = state.sessions.filter(s =>
-    !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q));
+  // Group by project (cwd) — a cross-project list mixing synapse/dcc/llm-proxy in
+  // random order was the "散乱" pile. Groups are ordered by their most-recent
+  // session; rows within a group are most-recent-first.
+  const f = state.sessions
+    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q));
+  const groups = new Map();
   for (const s of f) {
-    const it = document.createElement("div");
-    it.className = "s-item" + (s.id === state.activeId ? " active" : "");
-    const stCls = s.state === "busy" ? " busy" : (s.state === "error" ? " error" : "");
-    const dir = (s.cwd || "").split("/").filter(Boolean).pop() || s.cwd || "";
-    it.innerHTML =
-      `<div class="nm"><span class="st${stCls}"></span><span class="label">${escapeHtml(s.name || "Session")}</span></div>` +
-      `<div class="meta">${escapeHtml(dir)}${s.model ? " · " + escapeHtml(s.model) : ""}</div>`;
-    it.addEventListener("click", () => select(s.id));
-    list.appendChild(it);
+    const proj = (s.cwd || "").split("/").filter(Boolean).pop() || "other";
+    if (!groups.has(proj)) groups.set(proj, []);
+    groups.get(proj).push(s);
   }
+  const ordered = [...groups.entries()]
+    .map(([proj, items]) => {
+      items.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+      return { proj, items, recent: items[0] ? (items[0].started_at || 0) : 0 };
+    })
+    .sort((a, b) => b.recent - a.recent);
+  for (const g of ordered) {
+    const collapsed = collapsedGroups.has(g.proj);
+    const h = document.createElement("div");
+    h.className = "s-group" + (collapsed ? " collapsed" : "");
+    h.innerHTML = `<span class="chev">▸</span><span class="s-group-name">${escapeHtml(g.proj)}</span><span class="s-group-n">${g.items.length}</span>`;
+    const body = document.createElement("div");
+    body.className = "s-group-items";
+    for (const s of g.items) {
+      const it = document.createElement("div");
+      it.className = "s-item" + (s.id === state.activeId ? " active" : "");
+      // Single tight line: [status only if busy/error] title …… time.
+      // Idle is the default state, so it gets NO dot (a dot on every row was just noise).
+      const st = s.state === "busy" ? `<span class="st busy"></span>`
+               : s.state === "error" ? `<span class="st error"></span>` : "";
+      it.innerHTML =
+        st +
+        `<span class="label">${escapeHtml(s.name || "New session")}</span>` +
+        `<span class="when">${escapeHtml(relTime(s.started_at || 0))}</span>`;
+      it.addEventListener("click", () => select(s.id));
+      body.appendChild(it);
+    }
+    // Header toggles its group. Track folded projects in a Set so a re-render
+    // (WS update, search) doesn't pop everything back open.
+    h.addEventListener("click", () => {
+      const nowCollapsed = h.classList.toggle("collapsed");
+      if (nowCollapsed) collapsedGroups.add(g.proj); else collapsedGroups.delete(g.proj);
+    });
+    list.appendChild(h);
+    list.appendChild(body);
+  }
+}
+
+// Project groups the user has folded in the drawer (survives re-renders).
+const collapsedGroups = new Set();
+
+// Relative time for the session list. Runs in the browser, so Date is available
+// (the workflow-sandbox caveat elsewhere doesn't apply).
+function relTime(ms) {
+  if (!ms) return "";
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 7) return `${d}d ago`;
+  return new Date(ms).toLocaleDateString();
 }
 function select(id) {
   state.activeId = id;
   const s = state.sessions.find(x => x.id === id);
   if (s) {
     titleName.textContent = s.name || "Session";
-    subText.textContent = s.model || s.cwd || "session";
+    subText.textContent = s.model ? labelForModel(s.model) : (s.cwd || "session");
     dot.className = s.state === "busy" ? "busy" : (s.state === "error" ? "error" : "");
     // composer controls + empty-state subtitle reflect the active session
     const dir = (s.cwd || "").split("/").filter(Boolean).pop() || "";
-    const ml = $("modelLabel"); if (ml) ml.textContent = s.model || "Model";
+    const ml = $("modelLabel"); if (ml) ml.textContent = labelForModel(s.model);
     const ll = $("localLabel"); if (ll && dir) ll.textContent = dir;
     const es = $("emptySub"); if (es) es.textContent = dir || "";
   }
   clearMessages();
   state.turn = null;
+  // Seed busy from the session's current state so opening a session whose turn
+  // is already running (started on another device) shows the replying status at
+  // once; the live turn_stopped clears it.
+  setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
   closeDrawer();
 }
@@ -671,10 +769,18 @@ sendBtn.addEventListener("click", () => {
 function doSend() {
   const text = inputEl.value.trim();
   if (!text) return;
-  if (!state.activeId) { toast("No session"); return; }
-  echoUser(text);
-  send({ op: "send", sessionId: state.activeId, content: text });
   inputEl.value = ""; autoGrow();
+  if (!state.activeId) {
+    // No session yet: start one (in the selected model/repo) and send the
+    // message into it once it's created. Type-and-send always works.
+    state.pendingSend = text;
+    newSession();
+    return;
+  }
+  // No optimistic echo: the server broadcasts the user message to every device
+  // viewing this session and we render it from that broadcast (handleEvent
+  // "user"), so all devices show an identical transcript.
+  send({ op: "send", sessionId: state.activeId, content: text });
 }
 
 // =================== drawer ===================
@@ -688,7 +794,10 @@ $("search").addEventListener("input", renderSessions);
 function openDrawer() { $("drawer").classList.add("show"); $("drawerMask").classList.add("show"); }
 function closeDrawer() { $("drawer").classList.remove("show"); $("drawerMask").classList.remove("show"); }
 function newSession() {
-  send({ op: "create", opts: {} });
+  const opts = {};
+  if (state.pendingModel) opts.model = state.pendingModel;
+  if (state.pendingCwd) opts.cwd = state.pendingCwd;
+  send({ op: "create", opts });
   closeDrawer();
 }
 
@@ -698,6 +807,91 @@ document.querySelectorAll("#empty .suggestions button").forEach(b => {
     inputEl.value = b.dataset.prompt; autoGrow(); inputEl.focus();
   });
 });
+
+// =================== composer pickers (model + project) ===================
+// The "◆ Model" / "⎇ Local" pills open popovers of the server catalogs.
+//   model:   pick on an active session → `set_model` (next turn); with no
+//            session it's remembered for the next `create`.
+//   project: pick a git repo → start a fresh session there.
+function basename(p) {
+  const a = (p || "").split("/").filter(Boolean);
+  return a[a.length - 1] || p || "";
+}
+function labelForModel(id) {
+  if (!id) return "Default";
+  const m = state.models.find(x => x.id === id);
+  return m ? m.label : id;
+}
+function currentModelId() {
+  const s = state.sessions.find(x => x.id === state.activeId);
+  return (s ? s.model : (state.pendingModel || state.defaultModel)) || "";
+}
+function currentCwd() {
+  const s = state.sessions.find(x => x.id === state.activeId);
+  return (s ? s.cwd : state.pendingCwd) || "";
+}
+function syncModelLabel() {
+  const ml = $("modelLabel"); if (ml) ml.textContent = labelForModel(currentModelId());
+}
+function syncLocalLabel() {
+  const ll = $("localLabel"); const c = currentCwd();
+  if (ll) ll.textContent = c ? basename(c) : "Local";
+}
+function closeMenus() {
+  $("modelMenu").classList.remove("show");
+  $("localMenu").classList.remove("show");
+}
+// Render `items` ([{id,label,title?}]) into menu `id`, marking `cur` selected.
+function openMenu(id, items, cur, onPick, emptyMsg) {
+  closeMenus();
+  if (!items.length) { toast(emptyMsg); return; }
+  const menu = $(id);
+  menu.innerHTML = "";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "model-item" + (it.id === cur ? " sel" : "");
+    row.innerHTML = `<span>${escapeHtml(it.label)}</span>`;
+    if (it.title) row.title = it.title;
+    row.addEventListener("click", (e) => { e.stopPropagation(); onPick(it.id); });
+    menu.appendChild(row);
+  }
+  menu.classList.add("show");
+}
+function toggleMenu(id, build) {
+  const open = $(id).classList.contains("show");
+  closeMenus();
+  if (!open) build();
+}
+function chooseModel(id) {
+  closeMenus();
+  if (state.activeId) {
+    send({ op: "set_model", sessionId: state.activeId, model: id });
+    const s = state.sessions.find(x => x.id === state.activeId);
+    if (s) s.model = id;                 // optimistic; the broadcast confirms
+  } else {
+    state.pendingModel = id;
+  }
+  syncModelLabel();
+}
+function chooseCwd(path) {
+  closeMenus();
+  state.pendingCwd = path;               // newSession() reads this
+  syncLocalLabel();
+  newSession();                          // selecting a repo starts a session there
+}
+$("modelCtl").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleMenu("modelMenu", () => openMenu("modelMenu",
+    state.models.map(m => ({ id: m.id, label: m.label })),
+    currentModelId(), chooseModel, "No models configured"));
+});
+$("localCtl").addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleMenu("localMenu", () => openMenu("localMenu",
+    state.cwds.map(p => ({ id: p, label: basename(p), title: p })),
+    currentCwd(), chooseCwd, "No projects"));
+});
+document.addEventListener("click", closeMenus);
 
 // =================== toast ===================
 let toastTimer = null;

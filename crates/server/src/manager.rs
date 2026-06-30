@@ -5,12 +5,14 @@
 use crate::claude::{
     list_managed, new_session_id, ClaudeBin, ClaudeSession, ManagedEntry, SessionState,
 };
+use crate::models::{discover_catalog, ModelInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+use tracing::info;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionSummary {
@@ -53,18 +55,71 @@ enum TurnMsg {
 pub struct SessionManager {
     bin: ClaudeBin,
     default_cwd: PathBuf,
+    default_model: Option<String>,
+    catalog: Vec<ModelInfo>,
+    cwds: Vec<String>,
     sessions: Mutex<HashMap<String, Entry>>,
     subscribers: Mutex<Vec<mpsc::Sender<Value>>>,
 }
 
+/// Project working dirs Synapse offers in the picker: the git repos among
+/// Claude Code's known projects (`~/.claude.json` `projects`). Non-git and
+/// deleted paths are dropped to cut noise (`~`, caches, etc.).
+/// ponytail: parses the whole (multi-MB) claude.json once at startup; fine for
+/// a boot-time read — revisit only if startup latency ever matters.
+fn discover_projects() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let Ok(txt) = std::fs::read_to_string(home.join(".claude.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&txt) else {
+        return Vec::new();
+    };
+    match v.get("projects").and_then(|p| p.as_object()) {
+        Some(projects) => projects
+            .keys()
+            .filter(|p| std::path::Path::new(p).join(".git").exists())
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 impl SessionManager {
-    pub fn new(bin: ClaudeBin, default_cwd: PathBuf) -> Arc<Self> {
+    pub fn new(bin: ClaudeBin, default_cwd: PathBuf, default_model: Option<String>) -> Arc<Self> {
+        // Catalog + default come from Claude Code's own config (+ ~/.synapse
+        // customizations); `--default-model`/SYNAPSE_DEFAULT_MODEL overrides.
+        let (catalog, default) = discover_catalog(default_model);
+        let cwds = discover_projects();
+        info!(models = catalog.len(), projects = cwds.len(), default = %default, "config ready");
+        let default_model = Some(default).filter(|s| !s.is_empty());
         Arc::new(Self {
             bin,
             default_cwd,
+            default_model,
+            catalog,
+            cwds,
             sessions: Mutex::new(HashMap::new()),
             subscribers: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The selectable model catalog (sent to clients in `hello`).
+    pub fn catalog(&self) -> &[ModelInfo] {
+        &self.catalog
+    }
+
+    /// The default model id (empty string when unset → Claude Code default).
+    pub fn default_model_id(&self) -> &str {
+        self.default_model.as_deref().unwrap_or("")
+    }
+
+    /// Known project working dirs (git repos from Claude Code config), for the
+    /// composer's project picker.
+    pub fn cwds(&self) -> &[String] {
+        &self.cwds
     }
 
     pub async fn subscribe(&self) -> mpsc::Receiver<Value> {
@@ -78,25 +133,58 @@ impl SessionManager {
         subs.retain(|tx| tx.try_send(evt.clone()).is_ok());
     }
 
-    async fn summary(&self, id: &str, e: &Entry) -> SessionSummary {
-        let state = *e.session.state.lock().await;
+    async fn summary(
+        &self,
+        id: &str,
+        session: &Arc<ClaudeSession>,
+        started_at: u64,
+        attached: bool,
+    ) -> SessionSummary {
+        let state = *session.state.lock().await;
+        let cwd = session.cwd.to_string_lossy().to_string();
+        // Title: prefer the transcript's first prompt so each row shows what the
+        // session is about. This beats both the old "Interactive" default AND the
+        // CLI's auto-generated "<project>-<hash>" name (`claude agents --json`) —
+        // both are noise that made the list an unscannable pile. Fall back to an
+        // explicit name when there's no transcript yet, then to "New session".
+        let sid = session
+            .cc_session_id
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| id.to_string());
+        let name = crate::history::first_user_text(&cwd, &sid)
+            .await
+            .or_else(|| session.name.clone())
+            .or_else(|| Some("New session".into()));
         SessionSummary {
             id: id.to_string(),
-            name: e.session.name.clone(),
-            cwd: e.session.cwd.to_string_lossy().to_string(),
-            model: e.session.model.clone(),
-            agent: e.session.agent.clone(),
+            name,
+            cwd,
+            model: session.model(),
+            agent: session.agent.clone(),
             state,
-            started_at: e.started_at,
-            attached: e.attached,
+            started_at,
+            attached,
         }
     }
 
     pub async fn list(&self) -> Vec<SessionSummary> {
-        let sessions = self.sessions.lock().await;
+        // Snapshot cheap handles under the lock, then build summaries WITHOUT
+        // holding it: summary() reads a transcript for the title, and that file
+        // I/O must not block sends/creates waiting on the sessions mutex.
+        // ponytail: re-derives titles on each list(); fine for infrequent list
+        // calls + a handful of sessions — cache on the session if it ever grows.
+        let snap: Vec<(String, Arc<ClaudeSession>, u64, bool)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, e)| (id.clone(), e.session.clone(), e.started_at, e.attached))
+                .collect()
+        };
         let mut out = Vec::new();
-        for (id, e) in sessions.iter() {
-            out.push(self.summary(id, e).await);
+        for (id, session, started_at, attached) in &snap {
+            out.push(self.summary(id, session, *started_at, *attached).await);
         }
         out
     }
@@ -174,7 +262,7 @@ impl SessionManager {
             id.clone(),
             cwd,
             opts.name,
-            opts.model,
+            opts.model.filter(|s| !s.is_empty()).or_else(|| self.default_model.clone()),
             opts.permission_mode,
             opts.agent,
         ));
@@ -186,14 +274,33 @@ impl SessionManager {
             attached: false,
             tx,
         };
-        let summary = self.summary(&id, &entry).await;
+        let summary = self.summary(&id, &session, started_at, false).await;
         self.sessions.lock().await.insert(id.clone(), entry);
         self.spawn_runner(id.clone(), session, rx);
+        info!(session_id = %id, "session created");
         self.broadcast(serde_json::json!({
             "type": "system", "subtype": "session_created", "sessionId": id, "session": summary
         }))
         .await;
         Ok(summary)
+    }
+
+    /// Switch a session's model. Applies from its next turn (each turn
+    /// re-spawns `claude -p`). Broadcasts the updated summary so every client
+    /// reflects the change.
+    pub async fn set_model(&self, id: &str, model: Option<String>) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions.get(id).ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        session.set_model(model);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
     }
 
     pub async fn send(&self, id: &str, content: String) -> Result<(), String> {
@@ -205,6 +312,15 @@ impl SessionManager {
                 .tx
                 .clone()
         };
+        // Echo the user message to every subscriber so all devices viewing this
+        // session render the question — the turn stream itself never carries it.
+        // Broadcast before queueing so it precedes the runner's turn_started.
+        self.broadcast(serde_json::json!({
+            "type": "user",
+            "sessionId": id,
+            "message": { "role": "user", "content": [ { "type": "text", "text": content } ] }
+        }))
+        .await;
         tx.send(TurnMsg::Send(content))
             .await
             .map_err(|e| e.to_string())
@@ -241,6 +357,18 @@ impl SessionManager {
     }
 
     async fn attach_managed(self: &Arc<Self>, e: ManagedEntry) -> Option<()> {
+        // Background agents (`claude agents` kind=="background") cannot be
+        // resumed with `claude -p --resume <id>` — the CLI reports "No
+        // conversation found with session ID", the turn produces nothing, and
+        // the client sees a response-less send. Only attach resumable sessions.
+        if !is_attachable(&e) {
+            info!(
+                session_id = ?e.session_id.as_deref().or(e.id.as_deref()),
+                kind = ?e.kind,
+                "skipped non-attachable agent"
+            );
+            return None;
+        }
         let sid = e.session_id.or(e.id)?;
         let mut sessions = self.sessions.lock().await;
         // dedupe by Claude Code session id
@@ -254,19 +382,17 @@ impl SessionManager {
             .clone()
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_cwd.clone());
-        let name = e.name.clone().or_else(|| {
-            if e.kind.as_deref() == Some("background") {
-                Some("Background agent".into())
-            } else {
-                Some("Interactive".into())
-            }
-        });
+        // Leave the name unset unless the user explicitly named it: the summary
+        // derives a real title from the transcript's first prompt, so a generic
+        // "Interactive" here would just mask it and bring back the wall of
+        // identical rows. (Background agents are already filtered above.)
+        let name = e.name.clone();
         let session = Arc::new(ClaudeSession::new(
             self.bin.clone(),
             sid.clone(),
             cwd,
             name,
-            None,
+            self.default_model.clone(),
             None,
             None,
         ));
@@ -280,9 +406,10 @@ impl SessionManager {
             attached: true,
             tx,
         };
-        let summary = self.summary(&sid, &entry).await;
+        let summary = self.summary(&sid, &session, started_at, true).await;
         sessions.insert(sid.clone(), entry);
         drop(sessions);
+        info!(session_id = %sid, kind = ?e.kind, "attached managed session");
         self.spawn_runner(sid.clone(), session, rx);
         self.broadcast(serde_json::json!({
             "type": "system", "subtype": "session_created", "sessionId": sid, "session": summary
@@ -297,4 +424,73 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// A `claude agents` entry is attachable only if it can be resumed by
+/// `claude -p --resume <id>`. Background agents cannot, so they're excluded.
+fn is_attachable(e: &ManagedEntry) -> bool {
+    e.kind.as_deref() != Some("background")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(kind: Option<&str>) -> ManagedEntry {
+        ManagedEntry {
+            id: Some("x".into()),
+            session_id: Some("x".into()),
+            cwd: None,
+            name: None,
+            kind: kind.map(|k| k.into()),
+            state: None,
+            started_at: None,
+        }
+    }
+
+    #[test]
+    fn background_agents_are_not_attachable() {
+        assert!(!is_attachable(&entry(Some("background"))));
+    }
+
+    #[test]
+    fn interactive_and_unknown_kinds_are_attachable() {
+        assert!(is_attachable(&entry(Some("interactive"))));
+        assert!(is_attachable(&entry(None)));
+    }
+
+    // AC1 (server half): a send must broadcast the user message to subscribers so
+    // every device viewing the session renders the question, even though the turn
+    // stream never carries it. The echo precedes any turn output.
+    #[tokio::test]
+    async fn send_broadcasts_user_echo_to_subscribers() {
+        let mgr = SessionManager::new(
+            ClaudeBin(std::path::PathBuf::from("/nonexistent/claude")),
+            std::env::temp_dir(),
+            None,
+        );
+        let summary = mgr
+            .create(CreateOpts {
+                cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+                name: None,
+                model: None,
+                permission_mode: None,
+                agent: None,
+            })
+            .await
+            .unwrap();
+        // Subscribe AFTER create so the first event we see is the send's echo.
+        let mut rx = mgr.subscribe().await;
+        mgr.send(&summary.id, "hello world".to_string()).await.unwrap();
+        let evt = rx.recv().await.expect("a broadcast event");
+        assert_eq!(evt.get("type").and_then(|v| v.as_str()), Some("user"));
+        assert_eq!(
+            evt.get("sessionId").and_then(|v| v.as_str()),
+            Some(summary.id.as_str())
+        );
+        assert_eq!(
+            evt.pointer("/message/content/0/text").and_then(|v| v.as_str()),
+            Some("hello world")
+        );
+    }
 }

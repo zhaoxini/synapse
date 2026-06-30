@@ -2,6 +2,7 @@ mod claude;
 mod history;
 mod http;
 mod manager;
+mod models;
 mod relay;
 mod tls;
 mod tunnel;
@@ -82,6 +83,10 @@ struct Args {
     /// Verbose logging.
     #[arg(long)]
     dev: bool,
+    /// Default Claude model for all sessions (e.g. claude-sonnet-4-6).
+    /// Also read from SYNAPSE_DEFAULT_MODEL env var.
+    #[arg(long)]
+    default_model: Option<String>,
 }
 
 #[tokio::main]
@@ -90,10 +95,27 @@ async fn main() -> Result<()> {
     // transitive features are enabled by dependencies.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    let log_dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".synapse")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "server.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "synapse_server=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false),
         )
         .init();
 
@@ -103,7 +125,10 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let bin = claude::ClaudeBin::resolve(args.bin.as_ref());
 
-    let manager = SessionManager::new(bin.clone(), cwd.clone());
+    let default_model = args
+        .default_model
+        .or_else(|| std::env::var("SYNAPSE_DEFAULT_MODEL").ok());
+    let manager = SessionManager::new(bin.clone(), cwd.clone(), default_model);
     let (router, token) = http::router(manager.clone(), args.token);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;

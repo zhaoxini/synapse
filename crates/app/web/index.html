@@ -6,7 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Synapse</title>
-  <link rel="stylesheet" href="vendor/github-dark.min.css" />
+  <!-- code highlight theme follows the system scheme (Synara swaps code theme with the app theme) -->
+  <link rel="stylesheet" href="vendor/github.min.css" media="(prefers-color-scheme: light)" />
+  <link rel="stylesheet" href="vendor/github-dark.min.css" media="(prefers-color-scheme: dark)" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
@@ -57,6 +59,8 @@
         <button id="sendBtn" aria-label="Send">↑</button>
       </div>
     </div>
+    <div id="modelMenu" class="model-menu"></div>
+    <div id="localMenu" class="model-menu"></div>
   </footer>
 
   <!-- Drawer overlay -->
