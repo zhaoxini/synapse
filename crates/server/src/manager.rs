@@ -129,6 +129,7 @@ impl SessionManager {
         let cwds = discover_projects();
         info!(models = catalog.len(), projects = cwds.len(), default = %default, "config ready");
         let default_model = Some(default).filter(|s| !s.is_empty());
+        let meta = load_meta_sync();
         Arc::new(Self {
             bin,
             default_cwd,
@@ -137,10 +138,10 @@ impl SessionManager {
             cwds: Mutex::new(cwds),
             sessions: Mutex::new(HashMap::new()),
             subscribers: Mutex::new(Vec::new()),
-            renames: Mutex::new(HashMap::new()),
-            pinned: Mutex::new(HashSet::new()),
-            archived: Mutex::new(HashSet::new()),
-            hidden: Mutex::new(HashSet::new()),
+            renames: Mutex::new(meta.renames),
+            pinned: Mutex::new(meta.pinned.into_iter().collect()),
+            archived: Mutex::new(meta.archived.into_iter().collect()),
+            hidden: Mutex::new(meta.hidden.into_iter().collect()),
         })
     }
 
@@ -451,6 +452,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -479,6 +481,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_deleted", "sessionId": id
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -504,6 +507,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -523,6 +527,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -541,6 +546,7 @@ impl SessionManager {
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
         }))
         .await;
+        self.persist_meta().await;
         Ok(())
     }
 
@@ -549,6 +555,16 @@ impl SessionManager {
         for id in ids {
             if self.sessions.lock().await.contains_key(id) {
                 self.archive(id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Restore multiple archived sessions.
+    pub async fn unarchive_many(&self, ids: &[String]) -> Result<(), String> {
+        for id in ids {
+            if self.sessions.lock().await.contains_key(id) {
+                self.unarchive(id).await?;
             }
         }
         Ok(())
@@ -671,6 +687,50 @@ impl SessionManager {
         }))
         .await;
         Some(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct SessionMetaFile {
+    #[serde(default)]
+    pinned: Vec<String>,
+    #[serde(default)]
+    archived: Vec<String>,
+    #[serde(default)]
+    renames: HashMap<String, String>,
+    #[serde(default)]
+    hidden: Vec<String>,
+}
+
+fn meta_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".synapse").join("session_meta.json"))
+        .unwrap_or_else(|| PathBuf::from(".synapse/session_meta.json"))
+}
+
+fn load_meta_sync() -> SessionMetaFile {
+    let path = meta_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+impl SessionManager {
+    async fn persist_meta(&self) {
+        let file = SessionMetaFile {
+            pinned: self.pinned.lock().await.iter().cloned().collect(),
+            archived: self.archived.lock().await.iter().cloned().collect(),
+            renames: self.renames.lock().await.clone(),
+            hidden: self.hidden.lock().await.iter().cloned().collect(),
+        };
+        let path = meta_path();
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(txt) = serde_json::to_string_pretty(&file) {
+            let _ = tokio::fs::write(path, txt).await;
+        }
     }
 }
 

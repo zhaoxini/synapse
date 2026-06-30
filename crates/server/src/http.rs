@@ -386,12 +386,20 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 }
             }
             "unarchive" => {
-                let sid = cmd
-                    .get("sessionId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if let Err(e) = state.manager.unarchive(&sid).await {
+                let ids: Vec<String> = if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                } else {
+                    cmd.get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .map(|s| vec![s.to_string()])
+                        .unwrap_or_default()
+                };
+                if ids.is_empty() {
+                    continue;
+                }
+                if let Err(e) = state.manager.unarchive_many(&ids).await {
                     let _ = out_tx
                         .send(Message::Text(
                             json!({"type":"error","error":e,"op":"unarchive"}).to_string(),

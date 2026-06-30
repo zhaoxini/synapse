@@ -1565,7 +1565,9 @@ function exitSelectMode() {
 function updateSelectCount() {
   const n = state.selectedIds.size;
   $("selectCount").textContent = n ? `${n} selected` : "Select sessions";
-  $("selectArchive").disabled = n === 0;
+  const btn = $("selectArchive");
+  btn.textContent = state.showArchived ? "Unarchive" : "Archive";
+  btn.disabled = n === 0;
 }
 
 function showSessions() {
@@ -1657,12 +1659,20 @@ function renderWorkspaces() {
     row.innerHTML =
       `<div class="ws-icon">⎇</div>` +
       `<div class="ws-body"><div class="ws-name">${escapeHtml(basename(w.cwd))}</div>` +
-      `<div class="ws-meta">${escapeHtml(meta)}</div></div>`;
+      `<div class="ws-meta">${escapeHtml(meta)}</div></div>` +
+      `<button type="button" class="ws-new" aria-label="New session in ${escapeHtml(basename(w.cwd))}">+</button>`;
     row.title = w.cwd;
-    row.addEventListener("click", () => {
+    row.querySelector(".ws-body").addEventListener("click", () => {
       state.filterCwd = w.cwd;
       state.pendingCwd = w.cwd;
       showSessions();
+      haptic("light");
+    });
+    row.querySelector(".ws-new").addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.pendingCwd = w.cwd;
+      state.filterCwd = w.cwd;
+      newSession();
       haptic("light");
     });
     list.appendChild(row);
@@ -1948,12 +1958,14 @@ $("selectCancel").addEventListener("click", () => { exitSelectMode(); renderSess
 $("selectArchive").addEventListener("click", () => {
   const ids = [...state.selectedIds];
   if (!ids.length) return;
-  send({ op: "archive", sessionIds: ids });
+  if (state.showArchived) send({ op: "unarchive", sessionIds: ids });
+  else send({ op: "archive", sessionIds: ids });
   exitSelectMode();
   haptic("medium");
 });
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
+  updateSelectCount();
   renderSessions();
 });
 $("searchBtn").addEventListener("click", () => {
