@@ -9,6 +9,10 @@
 marked.setOptions({ breaks: true, gfm: true });
 
 const $ = (id) => document.getElementById(id);
+
+function haptic(style) {
+  if (window.__synapseHaptic__) window.__synapseHaptic__(style || "light");
+}
 const messagesEl = $("messages");
 const scroller = $("scroller");
 const emptyEl = $("empty");
@@ -22,8 +26,13 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
-  view: "sessions", // "sessions" | "chat"
+  view: "sessions", // "sessions" | "chat" | "workspaces"
   creating: false,
+  loadingHistory: false,
+  selectMode: false,
+  selectedIds: new Set(),
+  showArchived: false,
+  filterCwd: null,
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
@@ -239,7 +248,12 @@ function handle(v) {
       }
       break;
     case "sessions": break;
+    case "cwds":
+      state.cwds = v.cwds || [];
+      if (state.view === "workspaces") renderWorkspaces();
+      break;
     case "history":
+      state.loadingHistory = false;
       // Ignore a stale response for a session we've navigated away from: a slow
       // history (large transcript, mobile link) can land after the user switched,
       // painting the wrong session's messages under the new one ("session错乱").
@@ -337,6 +351,7 @@ function startTurn() {
     ticks: 0,             // live elapsed: counts seconds via pulse timer
     firstTs: 0, lastTs: 0,// frame timestamps (ms) — elapsed source for history
     appended: false,
+    activityCount: 0,
   };
   // don't add to DOM until there's content (avoid empty box)
 }
@@ -450,6 +465,7 @@ function scrollActivityFeed(feed, scroll) {
 }
 
 function renderActivityFeed(scroll, items, tn) {
+  const prev = tn.activityCount || 0;
   scroll.innerHTML = "";
   const lastIdx = items.length - 1;
   for (let i = 0; i < items.length; i++) {
@@ -462,6 +478,9 @@ function renderActivityFeed(scroll, items, tn) {
     const cls = "status-now has-action" + (now.running ? " running" : "");
     scroll.appendChild(statusLine(now.label, now.onClick, cls));
   }
+  const lines = scroll.querySelectorAll(".status-line");
+  for (let i = prev; i < lines.length; i++) lines[i].classList.add("line-enter");
+  tn.activityCount = lines.length;
 }
 
 function isItemActive(it, tn) {
@@ -651,10 +670,13 @@ function openSheet(title, content) {
   }
   $("sheetMask").classList.add("show");
   $("bottomSheet").classList.add("show");
+  $("bottomSheet").style.transform = "";
 }
 function closeSheet() {
   $("sheetMask").classList.remove("show");
   $("bottomSheet").classList.remove("show");
+  $("bottomSheet").classList.remove("dragging");
+  $("bottomSheet").style.transform = "";
 }
 function openThinkingSheet(text, secs) {
   openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", text || "No details.");
@@ -1291,7 +1313,19 @@ function clearMessages() {
   messagesEl.innerHTML = "";
   state.blocks = [];
   permEl = null;
+  state.loadingHistory = false;
   emptyEl.classList.remove("hidden");
+}
+
+function showHistorySkeleton() {
+  messagesEl.innerHTML = "";
+  state.blocks = [];
+  for (let i = 0; i < 3; i++) {
+    const sk = document.createElement("div");
+    sk.className = "msg-skeleton";
+    messagesEl.appendChild(sk);
+  }
+  emptyEl.classList.add("hidden");
 }
 
 // =================== smart scroll ===================
@@ -1420,22 +1454,61 @@ function closeRowMenu() { const m = $("rowMenu"); if (m) m.remove(); }
 function rowMenu(s, anchor) {
   closeRowMenu();
   const m = document.createElement("div"); m.className = "row-menu"; m.id = "rowMenu";
-  const rename = document.createElement("div"); rename.className = "row-mi"; rename.textContent = "Rename";
-  rename.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  const add = (label, cls, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi" + (cls ? " " + cls : "");
+    el.textContent = label;
+    el.addEventListener("click", (e) => { e.stopPropagation(); closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", "", () => {
     const n = prompt("Rename session", cleanTitle(s.name) || "");
     if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
   });
-  const del = document.createElement("div"); del.className = "row-mi danger"; del.textContent = "Delete";
-  del.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  add("Copy path", "", () => { copyText(s.cwd || ""); toast("Path copied"); haptic("light"); });
+  add(s.pinned ? "Unpin" : "Pin", "", () => {
+    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
+    haptic("medium");
+  });
+  add(s.archived ? "Unarchive" : "Archive", "", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+    haptic("medium");
+  });
+  add("Delete", "danger", () => {
     if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
   });
-  m.appendChild(rename); m.appendChild(del);
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${Math.max(8, Math.min(r.right - 150, window.innerWidth - 158))}px`;
+}
+
+function showRowContext(s) {
+  closeRowMenu();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const add = (label, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi";
+    el.textContent = label;
+    el.addEventListener("click", () => { closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", () => {
+    const n = prompt("Rename session", cleanTitle(s.name) || "");
+    if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
+  });
+  add("Copy path", () => { copyText(s.cwd || ""); toast("Path copied"); });
+  add(s.pinned ? "Unpin" : "Pin", () => send({ op: "pin", sessionId: s.id, pinned: !s.pinned }));
+  add(s.archived ? "Unarchive" : "Archive", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+  });
+  add("Delete", () => {
+    if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
+  });
+  document.body.appendChild(m);
 }
 document.addEventListener("click", closeRowMenu);
 
@@ -1457,29 +1530,73 @@ function dayGroup(ms) {
   return "Earlier";
 }
 
+function diffSubtitle(s) {
+  const a = s.diff_adds || 0;
+  const d = s.diff_dels || 0;
+  if (!a && !d) return "";
+  let html = "";
+  if (a) html += `<span class="sess-diff">+${a}</span>`;
+  if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${d}</span>`;
+  return html;
+}
+
 function sessionSubtitle(s) {
-  if (s.state === "busy") return { text: "Working", cls: "working" };
-  if (s.state === "error") return { text: "Check failed", cls: "error" };
+  if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
+  if (s.state === "error") return { text: "Check failed", cls: "error", html: "" };
+  const diff = diffSubtitle(s);
   const t = s.started_at || 0;
-  return t ? { text: relTime(t), cls: "" } : { text: "", cls: "" };
+  const time = t ? relTime(t) : "";
+  if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
+  if (diff) return { text: "", cls: "", html: diff };
+  return t ? { text: time, cls: "", html: "" } : { text: "", cls: "", html: "" };
 }
 
 let navFromPop = false;
 
+function exitSelectMode() {
+  state.selectMode = false;
+  state.selectedIds.clear();
+  document.body.classList.remove("select-mode");
+  $("sessionToolbar").classList.add("hidden");
+  $("selectBtn").classList.remove("active");
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const n = state.selectedIds.size;
+  $("selectCount").textContent = n ? `${n} selected` : "Select sessions";
+  $("selectArchive").disabled = n === 0;
+}
+
 function showSessions() {
   state.view = "sessions";
   document.body.classList.add("mode-sessions");
-  document.body.classList.remove("mode-chat");
+  document.body.classList.remove("mode-chat", "mode-workspaces");
+  document.body.classList.toggle("filter-cwd", !!state.filterCwd);
   closeSearch();
   updateTopbar();
   renderSessions();
 }
 
+function showWorkspaces(pushHistory) {
+  state.view = "workspaces";
+  document.body.classList.remove("mode-sessions", "mode-chat");
+  document.body.classList.add("mode-workspaces");
+  closeSearch();
+  exitSelectMode();
+  updateTopbar();
+  renderWorkspaces();
+  if (pushHistory !== false && !navFromPop) {
+    history.pushState({ synapse: "workspaces" }, "", location.href);
+  }
+}
+
 function showChat(pushHistory) {
   state.view = "chat";
-  document.body.classList.remove("mode-sessions");
+  document.body.classList.remove("mode-sessions", "mode-workspaces");
   document.body.classList.add("mode-chat");
   closeSearch();
+  exitSelectMode();
   updateTopbar();
   if (pushHistory !== false && !navFromPop) {
     history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
@@ -1497,29 +1614,140 @@ function closeSearch() {
 }
 
 function updateTopbar() {
-  if (state.view === "sessions") {
-    titleName.textContent = workspaceName();
+  if (state.view === "workspaces") {
+    titleName.textContent = "Workspaces";
+  } else if (state.view === "sessions") {
+    titleName.textContent = state.filterCwd ? basename(state.filterCwd) : workspaceName();
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
     titleName.textContent = s ? cleanTitle(s.name) : "Chat";
   }
 }
 
+function buildWorkspaces() {
+  const map = new Map();
+  for (const p of state.cwds) map.set(p, { cwd: p, count: 0, lastActive: 0, busy: 0 });
+  for (const s of state.sessions) {
+    if (!map.has(s.cwd)) map.set(s.cwd, { cwd: s.cwd, count: 0, lastActive: 0, busy: 0 });
+    const w = map.get(s.cwd);
+    if (!s.archived) w.count++;
+    if (s.state === "busy") w.busy++;
+    w.lastActive = Math.max(w.lastActive, s.started_at || 0);
+  }
+  return [...map.values()].sort((a, b) => b.lastActive - a.lastActive);
+}
+
+function renderWorkspaces() {
+  const list = $("workspaceList");
+  list.innerHTML = "";
+  const items = buildWorkspaces();
+  if (!items.length) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = "No projects found — add repos in Claude Code";
+    list.appendChild(hint);
+    return;
+  }
+  for (const w of items) {
+    const row = document.createElement("div");
+    row.className = "ws-row";
+    const meta = w.busy
+      ? `${w.count} session${w.count !== 1 ? "s" : ""} · Working`
+      : `${w.count} session${w.count !== 1 ? "s" : ""}`;
+    row.innerHTML =
+      `<div class="ws-icon">⎇</div>` +
+      `<div class="ws-body"><div class="ws-name">${escapeHtml(basename(w.cwd))}</div>` +
+      `<div class="ws-meta">${escapeHtml(meta)}</div></div>`;
+    row.title = w.cwd;
+    row.addEventListener("click", () => {
+      state.filterCwd = w.cwd;
+      state.pendingCwd = w.cwd;
+      showSessions();
+      haptic("light");
+    });
+    list.appendChild(row);
+  }
+}
+
+function bindSwipeRow(wrap, s) {
+  const row = wrap.querySelector(".sess-row");
+  let startX = 0, dx = 0, dragging = false;
+  row.addEventListener("touchstart", (e) => {
+    if (state.selectMode) return;
+    startX = e.touches[0].clientX;
+    dragging = true;
+    document.querySelectorAll(".sess-swipe-wrap.open").forEach(w => {
+      if (w !== wrap) w.classList.remove("open");
+    });
+  }, { passive: true });
+  row.addEventListener("touchmove", (e) => {
+    if (!dragging) return;
+    dx = e.touches[0].clientX - startX;
+    if (dx < 0 && dx > -140) row.style.transform = `translateX(${dx}px)`;
+  }, { passive: true });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    row.style.transform = "";
+    if (dx < -56) { wrap.classList.add("open"); haptic("light"); }
+    else wrap.classList.remove("open");
+    dx = 0;
+  };
+  row.addEventListener("touchend", end);
+  row.addEventListener("touchcancel", end);
+  wrap.querySelector(".act-pin").addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
+    wrap.classList.remove("open");
+    haptic("medium");
+  });
+  wrap.querySelector(".act-archive").addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ op: "archive", sessionId: s.id });
+    wrap.classList.remove("open");
+    haptic("medium");
+  });
+}
+
+function bindLongPress(row, s) {
+  let timer = null;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  row.addEventListener("touchstart", () => {
+    if (state.selectMode) return;
+    timer = setTimeout(() => { haptic("medium"); showRowContext(s); }, 480);
+  }, { passive: true });
+  row.addEventListener("touchend", clear);
+  row.addEventListener("touchmove", clear);
+  row.addEventListener("touchcancel", clear);
+}
+
 function renderSessions() {
   const q = ($("search").value || "").toLowerCase();
   const list = $("sessionList");
   list.innerHTML = "";
+  const archivedAny = state.sessions.some(s => s.archived);
+  $("archivedToggle").classList.toggle("hidden", !archivedAny);
+  $("archivedToggle").textContent = state.showArchived ? "Hide archived" : "Show archived";
+
   const f = state.sessions
+    .filter(s => state.showArchived ? s.archived : !s.archived)
+    .filter(s => !state.filterCwd || s.cwd === state.filterCwd)
     .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q))
-    .sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+      return (b.started_at || 0) - (a.started_at || 0);
+    });
 
   if (!f.length && !state.creating) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    hint.innerHTML = q
-      ? "No matching sessions"
+    const msg = state.filterCwd
+      ? `No sessions in ${basename(state.filterCwd)}`
+      : (q ? "No matching sessions" : "No sessions yet");
+    hint.innerHTML = q || state.filterCwd
+      ? msg
       : `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
-    if (!q) hint.querySelector(".empty-cta").addEventListener("click", newSession);
+    if (!q && !state.filterCwd) hint.querySelector(".empty-cta").addEventListener("click", newSession);
     list.appendChild(hint);
     return;
   }
@@ -1553,23 +1781,51 @@ function renderSessions() {
     head.textContent = gName;
     list.appendChild(head);
     for (const s of items) {
+      const wrap = document.createElement("div");
+      wrap.className = "sess-swipe-wrap";
+      wrap.innerHTML =
+        `<div class="sess-actions">` +
+          `<button type="button" class="act-pin">${s.pinned ? "Unpin" : "Pin"}</button>` +
+          `<button type="button" class="act-archive">Archive</button>` +
+        `</div>`;
       const row = document.createElement("div");
-      row.className = "sess-row" + (s.id === state.activeId ? " active" : "");
+      row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
       const sub = sessionSubtitle(s);
-      const subHtml = sub.text
-        ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "";
+      const subHtml = sub.html
+        ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
+        : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
+      const icon = s.pinned ? "★" : (s.state === "busy" ? "◐" : "+");
       row.innerHTML =
-        `<div class="sess-icon">${s.state === "busy" ? "◐" : "+"}</div>` +
+        `<div class="sess-check" aria-hidden="true"></div>` +
+        `<div class="sess-icon">${icon}</div>` +
         `<div class="sess-body">` +
           `<div class="sess-title">${escapeHtml(cleanTitle(s.name))}</div>` +
           subHtml +
         `</div>` +
         `<button class="sess-more" aria-label="Session actions">⋯</button>`;
-      row.addEventListener("click", () => select(s.id));
+      wrap.appendChild(row);
+      list.appendChild(wrap);
+
+      const check = row.querySelector(".sess-check");
+      if (state.selectedIds.has(s.id)) check.classList.add("on");
+
+      const onTap = () => {
+        if (state.selectMode) {
+          if (state.selectedIds.has(s.id)) state.selectedIds.delete(s.id);
+          else state.selectedIds.add(s.id);
+          check.classList.toggle("on", state.selectedIds.has(s.id));
+          updateSelectCount();
+          haptic("light");
+          return;
+        }
+        select(s.id);
+      };
+      row.addEventListener("click", onTap);
       row.querySelector(".sess-more").addEventListener("click", (e) => {
         e.stopPropagation(); rowMenu(s, e.currentTarget);
       });
-      list.appendChild(row);
+      bindSwipeRow(wrap, s);
+      bindLongPress(row, s);
     }
   }
 }
@@ -1595,12 +1851,12 @@ function select(id) {
   }
   clearMessages();
   state.turn = null;
-  // Seed busy from the session's current state so opening a session whose turn
-  // is already running (started on another device) shows the replying status at
-  // once; the live turn_stopped clears it.
+  state.loadingHistory = true;
+  showHistorySkeleton();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
   showChat();
+  haptic("light");
 }
 function autoGrow() {
   inputEl.style.height = "auto";
@@ -1610,8 +1866,15 @@ function autoGrow() {
 function updateSend() {
   const has = inputEl.value.trim().length > 0;
   sendBtn.classList.remove("active", "busy");
-  if (state.busy) sendBtn.classList.add("busy");
-  else if (has) sendBtn.classList.add("active");
+  if (state.busy) {
+    sendBtn.classList.add("busy");
+    sendBtn.disabled = false;
+  } else if (has) {
+    sendBtn.classList.add("active");
+    sendBtn.disabled = false;
+  } else {
+    sendBtn.disabled = true;
+  }
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
@@ -1620,13 +1883,14 @@ inputEl.addEventListener("keydown", (e) => {
   }
 });
 sendBtn.addEventListener("click", () => {
-  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); return; }
+  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); haptic("medium"); return; }
   doSend();
 });
 function doSend() {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = ""; autoGrow();
+  haptic("light");
   if (!state.activeId) {
     // No session yet: start one (in the selected model/repo) and send the
     // message into it once it's created. Type-and-send always works.
@@ -1642,6 +1906,13 @@ function doSend() {
 
 // =================== navigation ===================
 $("backBtn").addEventListener("click", () => {
+  haptic("light");
+  if (state.view === "workspaces" || (state.view === "sessions" && state.filterCwd)) {
+    if (history.state && history.state.synapse === "workspaces") history.back();
+    else if (state.filterCwd) { state.filterCwd = null; showSessions(); }
+    else showSessions();
+    return;
+  }
   if (history.state && history.state.synapse === "chat") history.back();
   else showSessions();
 });
@@ -1650,10 +1921,41 @@ window.addEventListener("popstate", () => {
     navFromPop = true;
     showSessions();
     navFromPop = false;
+  } else if (state.view === "workspaces") {
+    navFromPop = true;
+    showSessions();
+    navFromPop = false;
   }
 });
 $("newBtn").addEventListener("click", newSession);
-$("refreshBtn").addEventListener("click", () => send({ op: "refresh" }));
+$("workspaceBtn").addEventListener("click", () => showWorkspaces());
+$("refreshBtn").addEventListener("click", () => {
+  send({ op: "refresh" });
+  send({ op: "refresh_cwds" });
+  haptic("light");
+});
+$("selectBtn").addEventListener("click", () => {
+  state.selectMode = !state.selectMode;
+  document.body.classList.toggle("select-mode", state.selectMode);
+  $("selectBtn").classList.toggle("active", state.selectMode);
+  if (state.selectMode) {
+    $("sessionToolbar").classList.remove("hidden");
+    updateSelectCount();
+  } else exitSelectMode();
+  renderSessions();
+});
+$("selectCancel").addEventListener("click", () => { exitSelectMode(); renderSessions(); });
+$("selectArchive").addEventListener("click", () => {
+  const ids = [...state.selectedIds];
+  if (!ids.length) return;
+  send({ op: "archive", sessionIds: ids });
+  exitSelectMode();
+  haptic("medium");
+});
+$("archivedToggle").addEventListener("click", () => {
+  state.showArchived = !state.showArchived;
+  renderSessions();
+});
 $("searchBtn").addEventListener("click", () => {
   const wrap = $("searchWrap");
   const hidden = wrap.classList.toggle("hidden");
@@ -1828,11 +2130,96 @@ function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
 initAttachMenu();
+initKeyboardInset();
+initPullRefresh();
+initSheetDrag();
 if (creds()) hideConnectOverlay();
+updateSend();
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
 connect();
+
+function initKeyboardInset() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty("--kb", kb > 0 ? `${kb}px` : "0px");
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  apply();
+}
+
+function initPullRefresh() {
+  const list = $("sessionList");
+  const indicator = $("pullRefresh");
+  let startY = 0, pulling = false;
+  list.addEventListener("touchstart", (e) => {
+    if (list.scrollTop > 0 || state.view !== "sessions") return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  list.addEventListener("touchmove", (e) => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 0 && list.scrollTop <= 0) {
+      indicator.classList.toggle("pulling", dy > 40);
+      indicator.querySelector(".pull-label").textContent = dy > 72 ? "Release to refresh" : "Pull to refresh";
+    }
+  }, { passive: true });
+  const end = () => {
+    if (!pulling) return;
+    pulling = false;
+    if (indicator.classList.contains("pulling")) {
+      indicator.classList.remove("pulling");
+      indicator.classList.add("refreshing");
+      send({ op: "refresh" });
+      send({ op: "refresh_cwds" });
+      haptic("light");
+      setTimeout(() => indicator.classList.remove("refreshing"), 800);
+    } else {
+      indicator.classList.remove("pulling");
+    }
+  };
+  list.addEventListener("touchend", end);
+  list.addEventListener("touchcancel", end);
+}
+
+function initSheetDrag() {
+  const sheet = $("bottomSheet");
+  const handle = $("sheetHandle");
+  let startY = 0, curY = 0, dragging = false;
+  const onStart = (y) => { startY = y; dragging = true; sheet.classList.add("dragging"); };
+  const onMove = (y) => {
+    if (!dragging) return;
+    curY = Math.max(0, y - startY);
+    sheet.style.transform = `translateY(${curY}px)`;
+    const op = Math.max(0, 1 - curY / 280);
+    $("sheetMask").style.opacity = String(op * 0.55);
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove("dragging");
+    $("sheetMask").style.opacity = "";
+    if (curY > 100) closeSheet();
+    else sheet.style.transform = "";
+    curY = 0;
+  };
+  handle.addEventListener("touchstart", (e) => onStart(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchmove", (e) => onMove(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchend", onEnd);
+  sheet.addEventListener("touchstart", (e) => {
+    if (e.target === handle) return;
+    if (sheet.scrollTop <= 0) onStart(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (dragging) onMove(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchend", onEnd);
+}
 })();
