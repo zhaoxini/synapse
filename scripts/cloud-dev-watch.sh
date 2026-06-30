@@ -133,11 +133,28 @@ git_pull_if_needed() {
 
 watch_loop() {
   log "watching origin/$BRANCH every ${POLL_SECS}s (Ctrl+C to stop)"
+  local tick=0
   while true; do
     if changed=$(git_pull_if_needed); then
       log "pulled changes: $changed"
       deploy_once "$changed"
+    elif (( tick % 10 == 0 )) && command -v cloudflared >/dev/null 2>&1; then
+      # Quick tunnels drop silently; restart if public health returns 530.
+      local sh wh
+      sh=$(grep -aoE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf-server.log 2>/dev/null | tail -1 || true)
+      wh=$(grep -aoE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cf-web.log 2>/dev/null | tail -1 || true)
+      if [[ -n "$sh" ]] && ! curl -sf -o /dev/null "${sh}/api/health" 2>/dev/null; then
+        log "server tunnel unhealthy (530?) — restarting cf-server"
+        start_tunnel cf-server "$SERVER_PORT" /tmp/cf-server.log >/dev/null
+        write_public_url
+      fi
+      if [[ -n "$wh" ]] && ! curl -sf -o /dev/null "${wh}/" 2>/dev/null; then
+        log "web tunnel unhealthy — restarting cf-web"
+        start_tunnel cf-web "$WEB_PORT" /tmp/cf-web.log >/dev/null
+        write_public_url
+      fi
     fi
+    tick=$((tick + 1))
     sleep "$POLL_SECS"
   done
 }
