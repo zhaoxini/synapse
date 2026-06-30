@@ -34,4 +34,23 @@ This is a **Linux** dev VM. Standard build/lint/test/run commands live in `READM
 ### Reaching the web UI from a phone / off-VM
 
 The web UI runs on the VM's localhost, so a phone can't hit it directly. Expose **both** ports over HTTPS/WSS (e.g. two `cloudflared tunnel --url http://127.0.0.1:<port>` quick tunnels — one for `:8765`, one for `:4173`), then open on the phone:
-`https://<web-tunnel-host>/?host=<server-tunnel-host>&port=443&token=CODE&tls=1`. The page loads from the `:8765` tunnel and the in-page JS dials `wss://<server-tunnel-host>:443/?token=CODE`. (`synapse-server --tunnel` only tunnels the server/WS port; it does not serve the HTML, so the `:8765` page still needs its own tunnel — or use the native iOS app, which embeds the bundle and only needs the server tunnel.)
+`https://<web-tunnel-host>/?host=<server-tunnel-host>&port=443&token=CODE&tls=1`. The page loads from the `:8765` tunnel and the in-page JS dials `wss://<server-tunnel-host>:443/?token=CODE`. (`synapse-server --tunnel` only tunnels the server/WS port; it does not serve the HTML, so the `:8765` page still needs its own tunnel — or use the native iOS app, which embeds the bundle and only needs the server tunnel.) `trycloudflare.com` quick-tunnel hostnames are ephemeral (new random host per run, dead once the tunnel/VM stops); use a named tunnel or relay for anything stable.
+
+### Live-editing the web UI (instant, no Rust rebuild) vs. shipping it
+
+The web bundle is `include_*`-baked into the `synapse-web` / `synapse-app` binaries, so `synapse-web` (`:8765`) and the iOS WKWebView always serve the **compiled-in** copy — editing `crates/app/web/**` does nothing there until you rebuild (see the top of this file). For a fast dev loop, serve the source directory from disk with any static server and point a browser at it — edits show on **plain browser refresh**, no rebuild:
+
+```sh
+python3 -m http.server 8770 --directory crates/app/web   # or any static server
+# open: http://127.0.0.1:8770/?host=127.0.0.1&port=4173&token=CODE  (or via a tunnel for phone)
+```
+
+It dials the same running `synapse-server`, so only the static server reloads from disk; the server keeps running. This is dev-only — once the UI looks right, **rebuild to bake it in** (and reinstall the iOS app) or the change won't ship. There is no in-app/over-the-air hot-reload of the bundle in production.
+
+### Deploying updates
+
+CI (`.github/workflows/ci.yml`) only fmt/clippy/test/builds — there is no auto-deploy. To ship:
+
+- **Server / relay (Rust):** `cargo build --release -p synapse-server` (and `-p synapse-relay`), copy the binary to the host, restart the process. Expose remotely with `--tls` (real or self-signed cert), `--tunnel` (Cloudflare), or a self-hosted `synapse-relay` — all documented in `README.md`.
+- **Web UI change reaching users:** because the bundle is compiled in, a page change ships only by **rebuilding + redeploying** the binary that serves it (`synapse-web`, and/or rebuilding+reinstalling the iOS app via `mobile/build-*.sh` on macOS). Updating `crates/app/web/**` alone never reaches an already-deployed binary.
+- **Desktop/iOS app:** rebuild the relevant artifact (desktop `synapse-app`, or the iOS `.app`/staticlib) and reinstall on the device — there is no auto-update channel.
