@@ -173,25 +173,20 @@ function ingestAssistant(evt) {
     return;
   }
 
-  // Key the assembly buffer by message.id when present; fall back to the frame
-  // uuid (history transcript) so each turn still gets its own shell.
+  // Accumulate blocks into a per-message buffer (keyed by message.id, else the
+  // frame uuid for history transcripts, else a synthetic id).
   const mid = str(msg.id) || str(evt.uuid) || ("m" + state.blocks.length);
-
   let buf = state.streamBuf.get(mid);
   if (!buf) {
-    buf = { text: "", tools: new Map(), order: [], el: null };
+    buf = { text: "", thinking: "", tools: new Map(), el: null };
     state.streamBuf.set(mid, buf);
-    // real content arrived — drop the typing indicator and open a message shell
-    showPulse(false);
-    buf.el = mkMsg("assistant");
-    addBlock(buf.el);
   }
 
   for (const blk of content) {
     if (blk.type === "text" && typeof blk.text === "string") {
       buf.text += blk.text;
-    } else if (blk.type === "thinking" && blk.thinking) {
-      buf.thinking = (buf.thinking || "") + blk.thinking;
+    } else if (blk.type === "thinking" && typeof blk.thinking === "string") {
+      buf.thinking += blk.thinking;
     } else if (blk.type === "tool_use") {
       buf.tools.set(blk.id, {
         id: blk.id, name: blk.name,
@@ -201,7 +196,16 @@ function ingestAssistant(evt) {
     }
   }
 
-  renderStream(mid);
+  // Only open a message shell once there is something to render. A frame that
+  // carries only a thinking *signature* (no text/tool/visible thinking) must
+  // NOT create an empty box — that was the blank-card bug.
+  const hasContent = buf.text || buf.thinking || buf.tools.size > 0;
+  if (hasContent && !buf.el) {
+    buf.el = mkMsg("assistant");
+    addBlock(buf.el);
+  }
+  if (buf.el) renderStream(mid);
+  updatePulse();
   ensurePinned();
 }
 
@@ -237,6 +241,8 @@ function ingestResult(evt) {
       }
     }
   }
+  updatePulse();
+  ensurePinned();
 }
 
 function finalizeStream() {
@@ -392,18 +398,36 @@ function clearMessages() {
 }
 
 // =================== smart scroll ===================
+// `pinned` tracks whether the user is following the bottom. It only flips off
+// when the user scrolls UP themselves — streamed content never unpins it. This
+// fixes the "screen doesn't follow output" bug: measuring nearBottom() after
+// appending content always read false once a turn grew past the threshold.
+let pinned = true;
+const NEAR_BOTTOM_PX = 80;
 function nearBottom() {
-  return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 150;
+  return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < NEAR_BOTTOM_PX;
 }
+function scrollToBottom() {
+  scroller.scrollTop = scroller.scrollHeight;
+}
+// Run a DOM mutation, then keep the bottom pinned if we were already following.
 function ensurePinned() {
-  if (nearBottom()) scroller.scrollTop = scroller.scrollHeight;
-  else $("newPill").classList.add("show");
+  if (pinned) {
+    // double rAF: let layout settle (markdown/code height) before pinning
+    requestAnimationFrame(() => { scrollToBottom(); requestAnimationFrame(scrollToBottom); });
+    $("newPill").classList.remove("show");
+  } else {
+    $("newPill").classList.add("show");
+  }
 }
 scroller.addEventListener("scroll", () => {
-  if (nearBottom()) $("newPill").classList.remove("show");
+  // User-driven scroll decides pin state.
+  pinned = nearBottom();
+  if (pinned) $("newPill").classList.remove("show");
 });
 $("newPill").addEventListener("click", () => {
-  scroller.scrollTop = scroller.scrollHeight;
+  pinned = true;
+  scrollToBottom();
   $("newPill").classList.remove("show");
 });
 
@@ -413,23 +437,28 @@ function setBusy(b) {
   sendBtn.classList.toggle("busy", b);
   sendBtn.textContent = b ? "■" : "↑";
   dot.classList.toggle("busy", b);
-  if (b && !hasAssistantPending()) showPulse(true);
-  else showPulse(false);
+  updatePulse();
 }
-function hasAssistantPending() {
-  for (const b of state.streamBuf.values()) if (b.el) return true;
+// The typing indicator shows whenever the turn is busy and no assistant TEXT is
+// currently streaming — i.e. before the first token, while thinking, and while
+// a tool runs. It lives at the end of the list (after any tool cards).
+let pulseEl = null;
+function streamingText() {
+  for (const b of state.streamBuf.values()) if (b.text) return true;
   return false;
 }
-let pulseEl = null;
-function showPulse(on) {
-  if (on && !pulseEl) {
-    pulseEl = document.createElement("div");
-    pulseEl.className = "msg assistant";
-    pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
-    messagesEl.appendChild(pulseEl);
+function updatePulse() {
+  const show = state.busy && !streamingText();
+  if (show) {
+    if (!pulseEl) {
+      pulseEl = document.createElement("div");
+      pulseEl.className = "msg assistant pulse-row";
+      pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
+    }
+    messagesEl.appendChild(pulseEl); // move to end (after tool cards)
     emptyEl.classList.add("hidden");
     ensurePinned();
-  } else if (!on && pulseEl) {
+  } else if (pulseEl) {
     pulseEl.remove(); pulseEl = null;
   }
 }
