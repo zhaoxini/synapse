@@ -158,21 +158,31 @@ function handleEvent(evt) {
 function ingestAssistant(evt) {
   const msg = evt.message;
   if (!msg) return;
-  const mid = str(msg.id);
-  const content = Array.isArray(msg.content) ? msg.content : [];
+  const content = Array.isArray(msg.content)
+    ? msg.content
+    : (typeof msg.content === "string" ? [{ type: "text", text: msg.content }] : []);
 
-  // Auth/quota error frame: no message.id, content[0].text holds the error.
-  if (!mid) {
-    const et = content[0] && content[0].text;
-    if (et && str(et).trim()) pushError(str(et));
+  // A genuine auth/quota error frame is a synthetic assistant turn: it carries
+  // an explicit error marker and a single text block, with no real message id.
+  // (History transcript frames also lack message.id but are normal replies, so
+  // "no id" alone must NOT mean error — that was the bug that turned backfilled
+  // assistant messages into red error cards.)
+  const isError = (evt.error || msg.error) && content.length && content[0].text;
+  if (isError) {
+    pushError(str(content[0].text));
     return;
   }
+
+  // Key the assembly buffer by message.id when present; fall back to the frame
+  // uuid (history transcript) so each turn still gets its own shell.
+  const mid = str(msg.id) || str(evt.uuid) || ("m" + state.blocks.length);
 
   let buf = state.streamBuf.get(mid);
   if (!buf) {
     buf = { text: "", tools: new Map(), order: [], el: null };
     state.streamBuf.set(mid, buf);
-    // create the assistant message shell
+    // real content arrived — drop the typing indicator and open a message shell
+    showPulse(false);
     buf.el = mkMsg("assistant");
     addBlock(buf.el);
   }
@@ -235,6 +245,10 @@ function finalizeStream() {
     if (buf.tools) for (const t of buf.tools.values()) if (t.status === "running") t.status = "done";
   }
   for (const mid of state.streamBuf.keys()) renderStream(mid);
+  // Clear the assembly scratch: the rendered DOM stays on the page, but the
+  // next turn must start with an empty buffer so the typing indicator shows
+  // and a new message.id gets its own fresh shell.
+  state.streamBuf.clear();
 }
 
 // =================== history backfill ===================
@@ -411,7 +425,7 @@ function showPulse(on) {
   if (on && !pulseEl) {
     pulseEl = document.createElement("div");
     pulseEl.className = "msg assistant";
-    pulseEl.innerHTML = `<div class="avatar">✦</div><div class="pulse"><i></i><i></i><i></i></div>`;
+    pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
     messagesEl.appendChild(pulseEl);
     emptyEl.classList.add("hidden");
     ensurePinned();
@@ -553,5 +567,8 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
+// Dev/debug hooks: expose the inbound dispatcher + state for inspection. Harmless
+// in production; lets tooling drive synthetic frames without a live API.
+window.__synapse = { handle, handleEvent, state };
 connect();
 })();

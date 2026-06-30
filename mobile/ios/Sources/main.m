@@ -15,6 +15,7 @@
 // CSS safe-area insets handle the on-screen keyboard natively.
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 // Starts the embedded web host and returns the URL to load (malloc'd C string,
 // caller frees). Null on failure. Exported from crates/app/src/lib.rs.
@@ -23,7 +24,35 @@ extern char *synapse_web_url(void);
 // here we just rely on the lib's own defaults set in synapse_ios_main path.
 // (The web URL function reads the environment itself.)
 
-@interface SynapseWebDelegate : UIResponder <UIApplicationDelegate>
+// Remove the keyboard's input-accessory bar (the up/down/Done navigation strip
+// iOS injects above the keyboard for web form fields). There is no public API
+// to disable it on WKWebView, so we dynamically subclass the internal
+// WKContentView and override -inputAccessoryView to return nil. This is the
+// standard, widely-used workaround.
+// ponytail: runtime-subclass hack; the ceiling is a future iOS renaming
+// WKContentView — guarded by the prefix check, which simply no-ops if so.
+static void synapseRemoveInputAccessory(WKWebView *webView) {
+    UIView *contentView = nil;
+    for (UIView *v in webView.scrollView.subviews) {
+        if ([NSStringFromClass(v.class) hasPrefix:@"WKContent"]) {
+            contentView = v;
+            break;
+        }
+    }
+    if (!contentView) return;
+    NSString *subName = [NSStringFromClass(contentView.class) stringByAppendingString:@"_NoAccessory"];
+    Class subclass = NSClassFromString(subName);
+    if (!subclass) {
+        subclass = objc_allocateClassPair(contentView.class, subName.UTF8String, 0);
+        if (!subclass) return;
+        IMP nilImp = imp_implementationWithBlock(^id(id _self) { return nil; });
+        class_addMethod(subclass, @selector(inputAccessoryView), nilImp, "@@:");
+        objc_registerClassPair(subclass);
+    }
+    object_setClass(contentView, subclass);
+}
+
+@interface SynapseWebDelegate : UIResponder <UIApplicationDelegate, WKNavigationDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) WKWebView *web;
 @end
@@ -44,6 +73,7 @@ extern char *synapse_web_url(void);
     cfg.allowsInlineMediaPlayback = YES;
     self.web = [[WKWebView alloc] initWithFrame:self.window.bounds configuration:cfg];
     self.web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.web.navigationDelegate = self;
     // Let CSS env(safe-area-inset-*) drive insets; webview fills the window.
     self.web.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
 
@@ -67,6 +97,11 @@ extern char *synapse_web_url(void);
                          baseURL:nil];
     }
     return YES;
+}
+
+// Strip the keyboard accessory bar once the content view exists (post-load).
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    synapseRemoveInputAccessory(webView);
 }
 
 @end
