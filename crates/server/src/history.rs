@@ -44,45 +44,49 @@ pub async fn load_transcript(cwd: &str, session_id: &str, limit: usize) -> (Vec<
     load_from(&path, session_id, limit).await
 }
 
+/// Normalize one raw transcript line into a client-facing event, or `None` if
+/// the line isn't a message-bearing event the client renders. Tags with
+/// `sessionId` and drops transcript-internal fields. Keeps `message.id` so the
+/// live tailer's assistant frames reconcile against streamed ones on the
+/// desktop client (the web client ignores it). Shared by history backfill and
+/// the live transcript tailer so both apply identical filtering.
+pub fn normalize_line(line: &str, session_id: &str) -> Option<Value> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut evt = serde_json::from_str::<Value>(line).ok()?;
+    let ty = evt.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    // Keep only message-bearing events the client renders.
+    if ty != "user" && ty != "assistant" && ty != "system" {
+        return None;
+    }
+    if ty == "system" && evt.get("subtype").and_then(|v| v.as_str()) != Some("init") {
+        return None;
+    }
+    if evt.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    if let Some(obj) = evt.as_object_mut() {
+        obj.insert("sessionId".into(), Value::String(session_id.into()));
+        if let Some(m) = obj.get_mut("message").and_then(|m| m.as_object_mut()) {
+            m.remove("model");
+        }
+        obj.remove("parentUuid");
+        obj.remove("promptId");
+    }
+    Some(evt)
+}
+
 async fn load_from(path: &Path, session_id: &str, limit: usize) -> (Vec<Value>, bool) {
     let data = match tokio::fs::read_to_string(path).await {
         Ok(d) => d,
         Err(_) => return (Vec::new(), false),
     };
-    let mut events: Vec<Value> = Vec::new();
-    for line in data.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut evt = match serde_json::from_str::<Value>(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let ty = evt.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        // Keep only message-bearing events the client renders.
-        if ty != "user" && ty != "assistant" && ty != "system" {
-            continue;
-        }
-        if ty == "system" && evt.get("subtype").and_then(|v| v.as_str()) != Some("init") {
-            continue;
-        }
-        if evt.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
-            continue;
-        }
-        // Normalize: tag with sessionId, drop transcript-internal fields.
-        if let Some(obj) = evt.as_object_mut() {
-            obj.insert("sessionId".into(), Value::String(session_id.into()));
-            if let Some(m) = obj.get_mut("message").and_then(|m| m.as_object_mut()) {
-                m.remove("id");
-                m.remove("model");
-            }
-            obj.remove("parentUuid");
-            obj.remove("promptId");
-            let cleaned = obj.clone();
-            evt = Value::Object(cleaned);
-        }
-        events.push(evt);
-    }
+    let mut events: Vec<Value> = data
+        .lines()
+        .filter_map(|line| normalize_line(line, session_id))
+        .collect();
     let found = !events.is_empty();
     if events.len() > limit {
         events = events.split_off(events.len() - limit);
@@ -138,6 +142,13 @@ pub async fn first_user_text(cwd: &str, session_id: &str) -> Option<String> {
         if t.is_empty() || t.starts_with('<') {
             continue;
         }
+        // Strip command/hook boilerplate (/goal stop-hooks, continuation
+        // summaries, caveats) BEFORE truncating, so the 60-char title reads as
+        // the session's real intent. Pure boilerplate → skip to the next line.
+        let t = clean_title(&t);
+        if t.is_empty() {
+            continue;
+        }
         let head: String = t.chars().take(60).collect();
         return Some(if t.chars().count() > 60 {
             format!("{}…", head.trim_end())
@@ -146,6 +157,35 @@ pub async fn first_user_text(cwd: &str, session_id: &str) -> Option<String> {
         });
     }
     None
+}
+
+/// Strip command/hook boilerplate from a transcript line so the session title
+/// reads as the real intent. Returns "" when the line is pure boilerplate (the
+/// caller then falls through to the next user message).
+fn clean_title(t: &str) -> String {
+    // /goal stop-hook line: the meaningful bit is the quoted condition.
+    if let Some(rest) = t.split("Stop hook is now active with condition: \"").nth(1) {
+        return rest.split('"').next().unwrap_or(rest).trim().to_string();
+    }
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("this session is being continued") {
+        return "Continued session".to_string();
+    }
+    if lower.starts_with("caveat:") {
+        // Drop the caveat sentence; keep whatever real text follows it.
+        return t
+            .split("explicitly requested.")
+            .nth(1)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+    for cmd in ["/goal ", "/compact ", "/clear ", "/model ", "/ponytail "] {
+        if let Some(rest) = t.strip_prefix(cmd) {
+            return rest.trim().to_string();
+        }
+    }
+    t.to_string()
 }
 
 /// Inline normalize helper used when building a client-facing history payload.

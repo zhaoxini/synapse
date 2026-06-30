@@ -7,12 +7,13 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -58,7 +59,9 @@ pub struct ClaudeSession {
     /// `base_args` reads the latest value. ponytail: std Mutex, only ever
     /// lock+clone (never held across `.await`).
     pub model: std::sync::Mutex<Option<String>>,
-    pub permission_mode: Option<String>,
+    /// Permission mode passed to `--permission-mode` (None → Claude Code default).
+    /// Mutable mid-session like `model`. ponytail: std Mutex, lock+clone only.
+    pub permission_mode: std::sync::Mutex<Option<String>>,
     pub agent: Option<String>,
     pub bin: ClaudeBin,
     /// Claude Code's persistent session id, captured from the first turn.
@@ -67,6 +70,12 @@ pub struct ClaudeSession {
     /// Handle to the currently-running turn child, if any. Stored behind an
     /// Arc so Stop (from a different task) can kill the live process.
     child: tokio::sync::Mutex<Option<Arc<tokio::sync::Mutex<Option<Child>>>>>,
+    /// While a streaming turn runs, lines pushed here are written to claude's
+    /// stdin (used for `control_response` permission answers). None between turns.
+    stdin_tx: tokio::sync::Mutex<Option<mpsc::Sender<String>>>,
+    /// Pending permission prompts (request_id → original tool input) awaiting a
+    /// client decision; lets a plain allow echo the input back as `updatedInput`.
+    pending_perms: tokio::sync::Mutex<HashMap<String, Value>>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -92,12 +101,14 @@ impl ClaudeSession {
             cwd,
             name,
             model: std::sync::Mutex::new(model),
-            permission_mode,
+            permission_mode: std::sync::Mutex::new(permission_mode),
             agent,
             bin,
             cc_session_id: tokio::sync::Mutex::new(None),
             state: tokio::sync::Mutex::new(SessionState::Idle),
             child: tokio::sync::Mutex::new(None),
+            stdin_tx: tokio::sync::Mutex::new(None),
+            pending_perms: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -112,6 +123,17 @@ impl ClaudeSession {
         *self.model.lock().unwrap() = model.filter(|s| !s.is_empty());
     }
 
+    /// Current permission mode, if any (None → Claude Code default).
+    pub fn permission_mode(&self) -> Option<String> {
+        self.permission_mode.lock().unwrap().clone()
+    }
+
+    /// Switch the permission mode. Applies on the next turn (each turn re-spawns
+    /// `claude -p`), mirroring `set_model`.
+    pub fn set_permission_mode(&self, mode: Option<String>) {
+        *self.permission_mode.lock().unwrap() = mode.filter(|s| !s.is_empty());
+    }
+
     fn base_args(&self, streaming: bool, cc_sid: &Option<String>) -> Vec<String> {
         let mut args = vec!["-p".into(), "--verbose".into()];
         if streaming {
@@ -124,9 +146,16 @@ impl ClaudeSession {
             args.push("--output-format".into());
             args.push("json".into());
         }
-        if let Some(m) = &self.permission_mode {
+        if let Some(m) = self.permission_mode.lock().unwrap().clone() {
             args.push("--permission-mode".into());
-            args.push(m.clone());
+            args.push(m);
+        }
+        if streaming {
+            // Route tool-permission prompts to us over the stdio control protocol
+            // so the client can approve/deny (handled in read_stream). Harmless in
+            // bypass mode (claude never prompts then).
+            args.push("--permission-prompt-tool".into());
+            args.push("stdio".into());
         }
         if let Some(m) = self.model.lock().unwrap().clone() {
             args.push("--model".into());
@@ -203,7 +232,11 @@ impl ClaudeSession {
                 "type": "system", "subtype": "turn_stopped", "sessionId": self.id
             }))
             .await;
-        *self.state.lock().await = if failed { SessionState::Error } else { SessionState::Idle };
+        *self.state.lock().await = if failed {
+            SessionState::Error
+        } else {
+            SessionState::Idle
+        };
         produced
     }
 
@@ -236,21 +269,28 @@ impl ClaudeSession {
             }
         };
 
-        // Write stdin synchronously in this task, then drop it so claude knows
-        // the turn's input is complete. Doing this before the stdout reader
-        // runs removes the prior take()/put-back race where the reader could
-        // steal the Child out from under the input writer (leaving stdin never
-        // written and claude hanging forever).
-        if let Some(mut stdin) = child.stdin.take() {
-            if streaming {
-                let msg = serde_json::json!({
-                    "type": "user",
-                    "message": { "role": "user", "content": [ { "type": "text", "text": content } ] }
-                });
-                let _ = stdin.write_all(format!("{}\n", msg).as_bytes()).await;
-            } else {
-                let _ = stdin.write_all(content.as_bytes()).await;
+        let stdin = child.stdin.take();
+        if streaming {
+            // Keep stdin OPEN for the whole turn so we can write `control_response`
+            // lines back when claude asks for tool permission (`--permission-prompt-tool
+            // stdio`). A writer task owns stdin: it sends the user turn first, then
+            // forwards any control responses pushed on `stdin_tx`. The reader closes
+            // `stdin_tx` on the turn's `result` frame, dropping stdin (EOF) so claude
+            // exits. (The old path dropped stdin immediately, which made interactive
+            // permission prompts impossible.)
+            let (line_tx, line_rx) = mpsc::channel::<String>(16);
+            *self.stdin_tx.lock().await = Some(line_tx);
+            let user_line = serde_json::json!({
+                "type": "user",
+                "message": { "role": "user", "content": [ { "type": "text", "text": content } ] }
+            })
+            .to_string();
+            if let Some(stdin) = stdin {
+                tokio::spawn(stdin_writer(stdin, user_line, line_rx));
             }
+        } else if let Some(mut stdin) = stdin {
+            // Buffered fallback: no interactive control channel; write + close.
+            let _ = stdin.write_all(content.as_bytes()).await;
             let _ = stdin.flush().await;
             drop(stdin);
         }
@@ -270,12 +310,80 @@ impl ClaudeSession {
         } else {
             self.read_json(cell.clone(), tx).await
         };
+        // Turn done: close the stdin channel (drops stdin if the reader didn't
+        // already) and forget any unanswered permission prompts.
+        *self.stdin_tx.lock().await = None;
+        self.pending_perms.lock().await.clear();
         // clear the handle slot now that the turn is done
         {
             let mut slot = self.child.lock().await;
             *slot = None;
         }
         produced
+    }
+
+    /// Surface a `can_use_tool` permission prompt to clients and remember the
+    /// pending input so a plain "allow" can echo it back as `updatedInput`.
+    async fn emit_permission_request(&self, evt: &Value, tx: &mpsc::Sender<Value>) {
+        let request_id = evt
+            .get("request_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let req = evt.get("request").cloned().unwrap_or_default();
+        let input = req
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        self.pending_perms
+            .lock()
+            .await
+            .insert(request_id.clone(), input.clone());
+        let _ = tx
+            .send(serde_json::json!({
+                "type": "permission_request",
+                "requestId": request_id,
+                "toolName": req.get("tool_name"),
+                "toolUseId": req.get("tool_use_id"),
+                "input": input,
+                "suggestions": req.get("permission_suggestions"),
+            }))
+            .await;
+    }
+
+    /// Answer a pending permission prompt (from a client `permission_response`).
+    /// `allow` runs the tool (with `updated_input`, else the original input, as
+    /// `updatedInput`); otherwise it's denied with `message`. Returns false if no
+    /// turn is awaiting input.
+    pub async fn respond_permission(
+        &self,
+        request_id: &str,
+        allow: bool,
+        message: Option<String>,
+        updated_input: Option<Value>,
+    ) -> bool {
+        let cached = self.pending_perms.lock().await.remove(request_id);
+        let tx = { self.stdin_tx.lock().await.clone() };
+        let Some(tx) = tx else {
+            return false;
+        };
+        let inner = if allow {
+            serde_json::json!({
+                "behavior": "allow",
+                "updatedInput": updated_input.or(cached).unwrap_or_else(|| serde_json::json!({})),
+            })
+        } else {
+            serde_json::json!({
+                "behavior": "deny",
+                "message": message.unwrap_or_else(|| "Denied by user".to_string()),
+            })
+        };
+        let line = serde_json::json!({
+            "type": "control_response",
+            "response": { "subtype": "success", "request_id": request_id, "response": inner }
+        })
+        .to_string();
+        tx.send(line).await.is_ok()
     }
 
     /// Best-effort interrupt of the current turn: kills the live child if any.
@@ -316,8 +424,24 @@ impl ClaudeSession {
                 continue;
             }
             if let Ok(evt) = serde_json::from_str::<Value>(&line) {
+                // Permission prompt over the stdio control protocol: surface it to
+                // the client as a `permission_request` and keep reading; the
+                // decision arrives later via `respond_permission` (written to stdin).
+                if evt.get("type").and_then(|v| v.as_str()) == Some("control_request")
+                    && evt.pointer("/request/subtype").and_then(|v| v.as_str())
+                        == Some("can_use_tool")
+                {
+                    self.emit_permission_request(&evt, tx).await;
+                    continue;
+                }
+                let is_result = evt.get("type").and_then(|v| v.as_str()) == Some("result");
                 if self.ingest(&evt, tx).await {
                     produced += 1;
+                }
+                // Turn over: close stdin (held open for approvals) so claude sees
+                // EOF and exits, ending this read loop.
+                if is_result {
+                    *self.stdin_tx.lock().await = None;
                 }
             } else {
                 let _ = tx
@@ -436,6 +560,30 @@ async fn forward_stderr<R: AsyncReadExt + Unpin>(
     }
 }
 
+/// Owns a streaming turn's stdin: writes the user message, then forwards any
+/// control-response lines pushed on the channel until it closes (turn end) — at
+/// which point stdin drops and claude sees EOF.
+async fn stdin_writer(mut stdin: ChildStdin, user_line: String, mut rx: mpsc::Receiver<String>) {
+    if stdin
+        .write_all(format!("{}\n", user_line).as_bytes())
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let _ = stdin.flush().await;
+    while let Some(line) = rx.recv().await {
+        if stdin
+            .write_all(format!("{}\n", line).as_bytes())
+            .await
+            .is_err()
+        {
+            break;
+        }
+        let _ = stdin.flush().await;
+    }
+}
+
 pub fn new_session_id() -> String {
     Uuid::new_v4().to_string()
 }
@@ -459,7 +607,9 @@ mod tests {
 
     #[test]
     fn ok_result_and_assistant_count_as_produced() {
-        assert!(counts_as_produced(&json!({"type":"result","is_error":false})));
+        assert!(counts_as_produced(
+            &json!({"type":"result","is_error":false})
+        ));
         assert!(counts_as_produced(&json!({"type":"result"})));
         assert!(counts_as_produced(&json!({"type":"assistant"})));
         assert!(counts_as_produced(&json!({"type":"user"})));
@@ -467,8 +617,52 @@ mod tests {
 
     #[test]
     fn non_substantive_frames_do_not_count() {
-        assert!(!counts_as_produced(&json!({"type":"system","subtype":"init"})));
+        assert!(!counts_as_produced(
+            &json!({"type":"system","subtype":"init"})
+        ));
         assert!(!counts_as_produced(&json!({"type":"stderr","text":"x"})));
+    }
+
+    fn test_session(mode: Option<&str>) -> ClaudeSession {
+        ClaudeSession::new(
+            ClaudeBin(PathBuf::from("claude")),
+            "id".into(),
+            PathBuf::from("/tmp"),
+            None,
+            None,
+            mode.map(|m| m.into()),
+            None,
+        )
+    }
+
+    #[test]
+    fn permission_mode_round_trips_and_empty_clears() {
+        let s = test_session(Some("default"));
+        assert_eq!(s.permission_mode().as_deref(), Some("default"));
+        s.set_permission_mode(Some("acceptEdits".into()));
+        assert_eq!(s.permission_mode().as_deref(), Some("acceptEdits"));
+        s.set_permission_mode(Some(String::new())); // empty selection clears
+        assert_eq!(s.permission_mode(), None);
+    }
+
+    #[test]
+    fn streaming_args_request_stdio_permission_prompt() {
+        let s = test_session(None);
+        let streaming = s.base_args(true, &None);
+        assert!(streaming
+            .windows(2)
+            .any(|w| w == ["--permission-prompt-tool".to_string(), "stdio".to_string()]));
+        // The buffered fallback has no interactive control channel, so it must NOT
+        // request the stdio prompt (the turn would hang waiting on closed stdin).
+        let buffered = s.base_args(false, &None);
+        assert!(!buffered.iter().any(|a| a == "--permission-prompt-tool"));
+    }
+
+    #[tokio::test]
+    async fn respond_permission_without_active_turn_is_false() {
+        // No streaming turn running → no stdin channel → the decision is a no-op.
+        let s = test_session(None);
+        assert!(!s.respond_permission("req-1", true, None, None).await);
     }
 }
 

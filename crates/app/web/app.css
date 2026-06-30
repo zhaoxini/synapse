@@ -328,7 +328,8 @@ textarea { font: inherit; }
 #sendBtn.busy { background: var(--danger); color: #fff; }
 
 /* model picker — popover above the composer controls */
-#modelCtl { cursor: pointer; }
+#modelCtl, #localCtl { cursor: pointer; }
+.ctl:active { transform: scale(0.96); }
 .model-menu {
   position: absolute; left: 12px; bottom: calc(100% - 6px); z-index: 45;
   min-width: 200px; max-width: calc(100% - 24px); max-height: 50vh; overflow-y: auto;
@@ -336,15 +337,24 @@ textarea { font: inherit; }
   border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,.45);
   padding: 6px; display: none;
 }
-.model-menu.show { display: block; }
+.model-menu.show { display: block; animation: menuIn .13s ease-out; }
+@keyframes menuIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .model-item {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 9px 11px; border-radius: var(--radius-sm); font-size: 13px;
   color: var(--ink-2); cursor: pointer; white-space: nowrap;
 }
 .model-item:hover { background: var(--btn-secondary-hover); color: var(--ink); }
+.model-item:active { background: var(--btn-secondary); }
 .model-item.sel { color: var(--ink); }
 .model-item.sel::after { content: "✓"; color: var(--accent-text); font-size: 12px; }
+.path-input {
+  width: 100%; box-sizing: border-box; margin-bottom: 4px;
+  padding: 9px 11px; border-radius: var(--radius-sm); font-size: 13px;
+  background: var(--btn-secondary); border: 1px solid var(--border);
+  color: var(--ink); outline: none;
+}
+.path-input:focus { border-color: var(--accent-text); }
 
 /* ---------- new pill ---------- */
 #newPill {
@@ -424,3 +434,92 @@ textarea { font: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- tool bodies: diff / bash / todos / ask ---------- */
+/* card-body defaults to pre-wrap mono; these structured views opt out. */
+.card-body .diff, .card-body .todos, .card-body .ask, .card-body .md { white-space: normal; }
+
+/* unified diff (Edit / MultiEdit / Write / NotebookEdit) */
+.diff {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+  border: 1px solid var(--border-light); border-radius: 6px; overflow: hidden;
+}
+.diff + .diff { margin-top: 8px; }
+.diff-lines { overflow-x: auto; }
+.diff.foldable:not(.expanded) .diff-lines {
+  max-height: calc(var(--fold-lines) * 1.5 * 12px); overflow: hidden;
+}
+.dl { display: flex; width: max-content; min-width: 100%; white-space: pre; }
+.dl .g { width: 22px; flex: 0 0 22px; text-align: center; color: var(--ink-3); user-select: none; }
+.dl .c { flex: 1; padding-right: 10px; }
+.dl.add { background: color-mix(in srgb, var(--success) 16%, transparent); }
+.dl.add .g { color: var(--success); }
+.dl.del { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+.dl.del .g { color: var(--danger); }
+.dl.ctx { color: var(--ink-2); }
+
+/* bash command + tool-arg summary */
+.bash-cmd {
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink);
+  background: var(--code-bg); border-radius: 6px; padding: 6px 9px; margin-bottom: 6px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.tool-args {
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-2);
+  margin-bottom: 6px; white-space: pre-wrap; word-break: break-word;
+}
+
+/* todos (TodoWrite) */
+.todos { display: flex; flex-direction: column; gap: 3px; }
+.todo { display: flex; gap: 8px; align-items: flex-start; font-family: var(--font-ui); }
+.todo .tk { flex: 0 0 14px; }
+.todo .tx { flex: 1; white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+.todo.completed .tk { color: var(--success); }
+.todo.completed .tx { color: var(--ink-3); text-decoration: line-through; }
+.todo.in_progress .tk { color: var(--warning); }
+.todo.in_progress .tx { color: var(--ink); }
+
+/* ask-user-question (read-only render; Phase 2 makes options actionable) */
+.ask { display: flex; flex-direction: column; gap: 6px; font-family: var(--font-ui); }
+.ask-q { font-weight: 550; color: var(--ink); }
+.ask-o { border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 7px 10px; }
+.ask-lbl { font-weight: 500; color: var(--ink); display: block; }
+.ask-desc { color: var(--ink-3); font-size: 12px; }
+
+/* ---------- permission prompt (approve / deny) ---------- */
+.perm-row { margin-bottom: 14px; }
+.perm {
+  border: 1px solid var(--focus-border); border-radius: var(--radius-card);
+  padding: 10px 12px; background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+}
+.perm-head { font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+.perm .card { margin-bottom: 8px; }
+.perm-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+.perm-b {
+  height: 34px; padding: 0 14px; border-radius: var(--radius-sm);
+  font-weight: 550; font-size: 13px; border: 1px solid var(--border);
+  background: var(--btn-secondary); color: var(--ink); transition: filter .15s, background .15s;
+}
+.perm-b:hover { filter: brightness(1.08); }
+.perm-b.allow-btn { background: var(--success); color: #fff; border-color: transparent; }
+.perm-b.allow-btn.alt { background: transparent; color: var(--success); border-color: color-mix(in srgb, var(--success) 50%, transparent); }
+.perm-b.deny-btn { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); margin-left: auto; }
+
+/* ---------- session row actions (⋯ → rename / delete) ---------- */
+.s-item .s-more {
+  flex: 0 0 auto; width: 22px; height: 22px; margin-left: 2px; border-radius: var(--radius-sm);
+  color: var(--ink-3); font-size: 14px; line-height: 1; opacity: 0;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.s-item:hover .s-more, .s-item.active .s-more { opacity: 1; }
+.s-more:hover { background: var(--btn-secondary-hover); color: var(--ink); }
+@media (hover: none) { .s-item .s-more { opacity: .55; } }
+.row-menu {
+  position: fixed; z-index: 60; min-width: 140px; background: var(--elevated);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgba(0,0,0,.45); padding: 5px;
+}
+.row-mi { padding: 8px 11px; border-radius: var(--radius-sm); font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.row-mi:hover { background: var(--btn-secondary-hover); color: var(--ink); }
+.row-mi.danger { color: var(--danger); }
+.row-mi.danger:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }

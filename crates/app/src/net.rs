@@ -174,9 +174,7 @@ async fn run_connection(
             // the activeSessionId from the UI thread, so fetch it via a
             // one-shot sync channel inside invoke_from_event_loop.
             let (sid_tx, sid_rx) = std::sync::mpsc::channel::<String>();
-            invoke_with_ret(weak, sid_tx, |app| {
-                app.get_activeSessionId().to_string()
-            });
+            invoke_with_ret(weak, sid_tx, |app| app.get_activeSessionId().to_string());
             invoke(weak, |app| {
                 app.set_reconnecting(false);
                 app.set_showToast(false);
@@ -185,7 +183,8 @@ async fn run_connection(
                 if !sid.is_empty() {
                     let msg = serde_json::json!(
                         { "op": "history", "sessionId": sid, "limit": 400 }
-                    ).to_string();
+                    )
+                    .to_string();
                     let _ = tx.send(Message::Text(msg)).await;
                 }
             }
@@ -257,7 +256,6 @@ async fn sleep_backoff(backoff: &mut Duration) {
     *backoff = (*backoff * 2).min(Duration::from_secs(15));
     tokio::time::sleep(d).await;
 }
-
 
 /// Like [`invoke`] but also passes a single value back from the UI thread via
 /// a sync channel. Used when the net thread needs to read a UI property.
@@ -430,7 +428,11 @@ fn split_host_port(authority: &str, tls: bool) -> (String, String) {
         }
         _ => (
             authority.to_string(),
-            if tls { "443".to_string() } else { "80".to_string() },
+            if tls {
+                "443".to_string()
+            } else {
+                "80".to_string()
+            },
         ),
     }
 }

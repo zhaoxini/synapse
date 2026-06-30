@@ -241,18 +241,33 @@ Connect to `ws://<host>:<port>/?token=<TOKEN>`. All messages are JSON.
 | `history` | `sessionId`, `limit?` (default 400) | Load transcript events |
 | `list` | — | List all sessions |
 | `refresh` | — | Re-sync with on-disk Claude Code sessions, then list |
+| `set_model` | `sessionId`, `model?` | Switch the session's model (next turn) |
+| `set_permission_mode` | `sessionId`, `mode?` (`default`/`acceptEdits`/`plan`/`bypassPermissions`) | Switch the session's permission mode (next turn) |
+| `permission_response` | `sessionId`, `requestId`, `behavior` (`allow`/`deny`), `input?`, `message?` | Answer a pending tool-permission prompt |
+| `rename` | `sessionId`, `name` | Set a sticky session title (overrides the auto-title) |
+| `delete` | `sessionId` | Remove the session from the list (interrupts its turn; hidden from re-attach) |
 
 ### Server → client (events)
 
 | `type` | Fields | Meaning |
 |--------|--------|---------|
-| `hello` | `sessions[]` | Sent on connect with the current session list |
+| `hello` | `sessions[]`, `models[]`, `defaultModel`, `cwds[]` | Sent on connect with sessions + model/project catalogs |
 | `sessions` | `sessions[]` | Updated session list (after `list`/`refresh`) |
 | `created` | `session` | A new session was created |
 | `history` | `sessionId`, `events[]`, `found` | Transcript reply |
 | `event` | `event` | A streamed Claude event (`assistant`/`user`/`result`/…) |
-| `system` | `subtype`, `sessionId` | `turn_started`, `turn_stopped`, `session_created`, `fallback_to_json`, `bridge_error` |
+| `system` | `subtype`, `sessionId` | `turn_started`, `turn_stopped`, `session_created`, `session_updated`, `session_deleted`, `fallback_to_json`, `bridge_error` |
 | `error` | `error`, `op?` | Operation failed |
+
+`SessionSummary` (in `hello`/`sessions`/`created`/`session_*`): `{ id, name?, cwd, model?, permission_mode?, agent?, state, started_at, attached }`.
+
+**Tool-permission prompts.** Streaming turns run `claude` with `--permission-prompt-tool stdio`, so when a tool needs approval the server emits an inner `event` of type **`permission_request`**:
+
+```json
+{ "type": "permission_request", "sessionId", "requestId", "toolName", "toolUseId", "input": { … }, "suggestions": [ … ] }
+```
+
+The client renders an approve/deny prompt (with a diff for edits) and replies with the `permission_response` op above. `allow` runs the tool (`input` is echoed back as the — possibly edited — `updatedInput`); `deny` blocks it and tells the model. `toolUseId` correlates the prompt to the tool card already rendered for that turn.
 
 ## CI
 

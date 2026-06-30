@@ -49,10 +49,22 @@ fn build_catalog(
     };
 
     let mut catalog = vec![
-        ModelInfo { id: String::new(), label: "Default".into() },
-        ModelInfo { id: "opus".into(), label: label_for("opus", "Opus") },
-        ModelInfo { id: "sonnet".into(), label: label_for("sonnet", "Sonnet") },
-        ModelInfo { id: "haiku".into(), label: label_for("haiku", "Haiku") },
+        ModelInfo {
+            id: String::new(),
+            label: "Default".into(),
+        },
+        ModelInfo {
+            id: "opus".into(),
+            label: label_for("opus", "Opus"),
+        },
+        ModelInfo {
+            id: "sonnet".into(),
+            label: label_for("sonnet", "Sonnet"),
+        },
+        ModelInfo {
+            id: "haiku".into(),
+            label: label_for("haiku", "Haiku"),
+        },
     ];
     // Custom entries augment the catalog; skip ids already present.
     for m in custom {
@@ -75,7 +87,10 @@ fn build_catalog(
     // when it's a full id (e.g. `--default-model claude-sonnet-4-6`) outside the
     // alias set.
     if !default.is_empty() && !catalog.iter().any(|c| c.id == default) {
-        catalog.push(ModelInfo { id: default.clone(), label: default.clone() });
+        catalog.push(ModelInfo {
+            id: default.clone(),
+            label: default.clone(),
+        });
     }
 
     (catalog, default)
@@ -112,8 +127,14 @@ mod tests {
             }
         });
         let custom = vec![
-            ModelInfo { id: "gpt-5.5".into(), label: "GPT-5.5".into() },
-            ModelInfo { id: "opus".into(), label: "dup-ignored".into() },
+            ModelInfo {
+                id: "gpt-5.5".into(),
+                label: "GPT-5.5".into(),
+            },
+            ModelInfo {
+                id: "opus".into(),
+                label: "dup-ignored".into(),
+            },
         ];
 
         let (cat, def) = build_catalog(Some(&settings), custom, None);
@@ -121,9 +142,15 @@ mod tests {
         assert_eq!(def, "haiku", "default falls back to Claude Code `model`");
         assert_eq!(cat[0].id, "", "Default entry is first and omits --model");
         assert_eq!(cat[1].label, "claude-opus-4-8", "opus label from env");
-        assert_eq!(cat[2].label, "Sonnet", "sonnet label falls back when env absent");
+        assert_eq!(
+            cat[2].label, "Sonnet",
+            "sonnet label falls back when env absent"
+        );
         assert_eq!(cat[3].label, "glm-5.3-external", "haiku label from env");
-        assert!(cat.iter().any(|m| m.id == "gpt-5.5"), "custom model appended");
+        assert!(
+            cat.iter().any(|m| m.id == "gpt-5.5"),
+            "custom model appended"
+        );
         assert_eq!(
             cat.iter().filter(|m| m.id == "opus").count(),
             1,

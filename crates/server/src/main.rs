@@ -4,6 +4,7 @@ mod http;
 mod manager;
 mod models;
 mod relay;
+mod tail;
 mod tls;
 mod tunnel;
 
@@ -224,6 +225,10 @@ async fn main() -> Result<()> {
             relay::run_bridge(&relay_url, &device_id, &relay_token, &local_ws).await;
         });
     }
+
+    // Mirror sessions driven outside Synapse (native Claude Code in a terminal)
+    // to every client by tailing their transcripts live.
+    tail::spawn(manager.clone());
 
     // Attach to existing Claude Code sessions in the background so a slow or
     // hanging `claude agents` never blocks the listener. New sessions can

@@ -8,7 +8,7 @@ use crate::claude::{
 use crate::models::{discover_catalog, ModelInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -20,6 +20,7 @@ pub struct SessionSummary {
     pub name: Option<String>,
     pub cwd: String,
     pub model: Option<String>,
+    pub permission_mode: Option<String>,
     pub agent: Option<String>,
     pub state: SessionState,
     pub started_at: u64,
@@ -60,11 +61,32 @@ pub struct SessionManager {
     cwds: Vec<String>,
     sessions: Mutex<HashMap<String, Entry>>,
     subscribers: Mutex<Vec<mpsc::Sender<Value>>>,
+    /// User title overrides (session id → name) from `rename`.
+    renames: Mutex<HashMap<String, String>>,
+    /// Session ids (local + cc) hidden by `delete`, so a refresh/attach won't
+    /// resurrect them. ponytail: in-memory — a deleted session reappears after a
+    /// server restart; persist to ~/.synapse if that ever matters.
+    hidden: Mutex<HashSet<String>>,
 }
 
 /// Project working dirs Synapse offers in the picker: the git repos among
 /// Claude Code's known projects (`~/.claude.json` `projects`). Non-git and
 /// deleted paths are dropped to cut noise (`~`, caches, etc.).
+/// Expand a leading `~` (the one shell-ism we accept from a typed path) to
+/// $HOME. `~user` and everything else pass through verbatim. Discovered-project
+/// paths are already absolute, so a manually typed path is the only caller that
+/// needs this.
+fn expand_home(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') {
+            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                return home.join(rest.trim_start_matches('/'));
+            }
+        }
+    }
+    PathBuf::from(p)
+}
+
 /// ponytail: parses the whole (multi-MB) claude.json once at startup; fine for
 /// a boot-time read — revisit only if startup latency ever matters.
 fn discover_projects() -> Vec<String> {
@@ -103,6 +125,8 @@ impl SessionManager {
             cwds,
             sessions: Mutex::new(HashMap::new()),
             subscribers: Mutex::new(Vec::new()),
+            renames: Mutex::new(HashMap::new()),
+            hidden: Mutex::new(HashSet::new()),
         })
     }
 
@@ -128,9 +152,33 @@ impl SessionManager {
         rx
     }
 
-    async fn broadcast(&self, evt: Value) {
+    pub(crate) async fn broadcast(&self, evt: Value) {
         let mut subs = self.subscribers.lock().await;
         subs.retain(|tx| tx.try_send(evt.clone()).is_ok());
+    }
+
+    /// Snapshot every session as (local id, cwd, Claude Code session id, state)
+    /// for the transcript tailer. Mirrors `list()`'s lock discipline: grab cheap
+    /// handles under the sessions lock, then read the per-session async mutexes
+    /// without holding it.
+    pub(crate) async fn tail_snapshot(
+        &self,
+    ) -> Vec<(String, String, Option<String>, SessionState)> {
+        let snap: Vec<(String, Arc<ClaudeSession>)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, e)| (id.clone(), e.session.clone()))
+                .collect()
+        };
+        let mut out = Vec::with_capacity(snap.len());
+        for (id, session) in snap {
+            let cc = session.cc_session_id.lock().await.clone();
+            let state = *session.state.lock().await;
+            let cwd = session.cwd.to_string_lossy().to_string();
+            out.push((id, cwd, cc, state));
+        }
+        out
     }
 
     async fn summary(
@@ -153,15 +201,20 @@ impl SessionManager {
             .await
             .clone()
             .unwrap_or_else(|| id.to_string());
-        let name = crate::history::first_user_text(&cwd, &sid)
-            .await
-            .or_else(|| session.name.clone())
-            .or_else(|| Some("New session".into()));
+        // A user `rename` wins over the transcript-derived title.
+        let name = match self.renames.lock().await.get(id).cloned() {
+            Some(n) => Some(n),
+            None => crate::history::first_user_text(&cwd, &sid)
+                .await
+                .or_else(|| session.name.clone())
+                .or_else(|| Some("New session".into())),
+        };
         SessionSummary {
             id: id.to_string(),
             name,
             cwd,
             model: session.model(),
+            permission_mode: session.permission_mode(),
             agent: session.agent.clone(),
             state,
             started_at,
@@ -255,14 +308,16 @@ impl SessionManager {
         let id = new_session_id();
         let cwd = opts
             .cwd
-            .map(PathBuf::from)
+            .map(|c| expand_home(&c))
             .unwrap_or_else(|| self.default_cwd.clone());
         let session = Arc::new(ClaudeSession::new(
             self.bin.clone(),
             id.clone(),
             cwd,
             opts.name,
-            opts.model.filter(|s| !s.is_empty()).or_else(|| self.default_model.clone()),
+            opts.model
+                .filter(|s| !s.is_empty())
+                .or_else(|| self.default_model.clone()),
             opts.permission_mode,
             opts.agent,
         ));
@@ -291,13 +346,104 @@ impl SessionManager {
     pub async fn set_model(&self, id: &str, model: Option<String>) -> Result<(), String> {
         let (session, started_at, attached) = {
             let sessions = self.sessions.lock().await;
-            let e = sessions.get(id).ok_or_else(|| "unknown session".to_string())?;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
             (e.session.clone(), e.started_at, e.attached)
         };
         session.set_model(model);
         let summary = self.summary(id, &session, started_at, attached).await;
         self.broadcast(serde_json::json!({
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
+    }
+
+    /// Switch a session's permission mode (default/acceptEdits/plan/
+    /// bypassPermissions). Applies from its next turn; broadcasts the new summary.
+    pub async fn set_permission_mode(&self, id: &str, mode: Option<String>) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        session.set_permission_mode(mode);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
+    }
+
+    /// Deliver a permission decision (allow/deny) to a session's running turn,
+    /// answering a `permission_request` the client surfaced.
+    pub async fn respond_permission(
+        &self,
+        id: &str,
+        request_id: &str,
+        allow: bool,
+        message: Option<String>,
+        updated_input: Option<Value>,
+    ) -> Result<(), String> {
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?
+                .session
+                .clone()
+        };
+        session
+            .respond_permission(request_id, allow, message, updated_input)
+            .await;
+        Ok(())
+    }
+
+    /// Set a sticky title for a session (overrides the transcript-derived name).
+    pub async fn rename(&self, id: &str, name: String) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        self.renames.lock().await.insert(id.to_string(), name);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
+    }
+
+    /// Remove a session from the list (interrupting any running turn) and hide it
+    /// so a refresh/attach won't bring it back this run. Broadcasts
+    /// `session_deleted` so every client drops it.
+    pub async fn delete(&self, id: &str) -> Result<(), String> {
+        let (tx, session) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.tx.clone(), e.session.clone())
+        };
+        let cc = session.cc_session_id.lock().await.clone();
+        let _ = tx.send(TurnMsg::Stop).await; // interrupt a running turn, if any
+        self.sessions.lock().await.remove(id);
+        {
+            let mut hidden = self.hidden.lock().await;
+            hidden.insert(id.to_string());
+            if let Some(cc) = cc {
+                hidden.insert(cc);
+            }
+        }
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_deleted", "sessionId": id
         }))
         .await;
         Ok(())
@@ -370,6 +516,10 @@ impl SessionManager {
             return None;
         }
         let sid = e.session_id.or(e.id)?;
+        // A user-deleted session must not be resurrected by a refresh/attach.
+        if self.hidden.lock().await.contains(&sid) {
+            return None;
+        }
         let mut sessions = self.sessions.lock().await;
         // dedupe by Claude Code session id
         for entry in sessions.values() {
@@ -459,6 +609,20 @@ mod tests {
         assert!(is_attachable(&entry(None)));
     }
 
+    #[test]
+    fn expand_home_handles_tilde() {
+        // Reads ambient $HOME (always set in dev/CI) rather than mutating it, so it
+        // can't race other tests that read HOME in parallel.
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            expand_home("~/code/foo"),
+            PathBuf::from(&home).join("code/foo")
+        );
+        assert_eq!(expand_home("~"), PathBuf::from(&home));
+        assert_eq!(expand_home("/abs/path"), PathBuf::from("/abs/path"));
+        assert_eq!(expand_home("~user"), PathBuf::from("~user")); // not a path expansion
+    }
+
     // AC1 (server half): a send must broadcast the user message to subscribers so
     // every device viewing the session renders the question, even though the turn
     // stream never carries it. The echo precedes any turn output.
@@ -481,7 +645,9 @@ mod tests {
             .unwrap();
         // Subscribe AFTER create so the first event we see is the send's echo.
         let mut rx = mgr.subscribe().await;
-        mgr.send(&summary.id, "hello world".to_string()).await.unwrap();
+        mgr.send(&summary.id, "hello world".to_string())
+            .await
+            .unwrap();
         let evt = rx.recv().await.expect("a broadcast event");
         assert_eq!(evt.get("type").and_then(|v| v.as_str()), Some("user"));
         assert_eq!(
@@ -489,8 +655,40 @@ mod tests {
             Some(summary.id.as_str())
         );
         assert_eq!(
-            evt.pointer("/message/content/0/text").and_then(|v| v.as_str()),
+            evt.pointer("/message/content/0/text")
+                .and_then(|v| v.as_str()),
             Some("hello world")
         );
+    }
+
+    // Phase 3: rename sets a sticky title; delete removes the session from the list.
+    #[tokio::test]
+    async fn rename_sets_title_and_delete_removes_session() {
+        let mgr = SessionManager::new(
+            ClaudeBin(std::path::PathBuf::from("/nonexistent/claude")),
+            std::env::temp_dir(),
+            None,
+        );
+        let s = mgr
+            .create(CreateOpts {
+                cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+                name: None,
+                model: None,
+                permission_mode: None,
+                agent: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(mgr.list().await.len(), 1);
+        mgr.rename(&s.id, "My renamed session".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.list().await.first().and_then(|x| x.name.as_deref()),
+            Some("My renamed session")
+        );
+        mgr.delete(&s.id).await.unwrap();
+        assert!(mgr.list().await.is_empty());
+        assert!(mgr.rename(&s.id, "x".into()).await.is_err()); // gone
     }
 }

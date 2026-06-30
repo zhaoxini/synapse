@@ -249,11 +249,101 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let model = cmd.get("model").and_then(|v| v.as_str()).map(str::to_string);
+                let model = cmd
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 if let Err(e) = state.manager.set_model(&sid, model).await {
                     let _ = out_tx
                         .send(Message::Text(
                             json!({"type":"error","error":e,"op":"set_model"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "set_permission_mode" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mode = cmd.get("mode").and_then(|v| v.as_str()).map(str::to_string);
+                if let Err(e) = state.manager.set_permission_mode(&sid, mode).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"set_permission_mode"})
+                                .to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "permission_response" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let request_id = cmd
+                    .get("requestId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // Accept `behavior:"allow"|"deny"` (or `allow:true/false`).
+                let allow = match cmd.get("behavior").and_then(|v| v.as_str()) {
+                    Some("allow") => true,
+                    Some("deny") => false,
+                    _ => cmd.get("allow").and_then(|v| v.as_bool()).unwrap_or(false),
+                };
+                let message = cmd
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let updated_input = cmd.get("input").cloned();
+                if let Err(e) = state
+                    .manager
+                    .respond_permission(&sid, &request_id, allow, message, updated_input)
+                    .await
+                {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"permission_response"})
+                                .to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "rename" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = cmd
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !name.is_empty() {
+                    if let Err(e) = state.manager.rename(&sid, name).await {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"error","error":e,"op":"rename"}).to_string(),
+                            ))
+                            .await;
+                    }
+                }
+            }
+            "delete" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Err(e) = state.manager.delete(&sid).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"delete"}).to_string(),
                         ))
                         .await;
                 }

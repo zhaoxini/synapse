@@ -6,8 +6,8 @@ slint::include_modules!();
 mod net;
 pub mod web;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use net::{NetCmd, NetHandle};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 fn model_rc<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
@@ -45,12 +45,11 @@ fn flush_stream(app: &App) -> bool {
         return false;
     };
     // First row index belonging to the streamed message (keyed by messageId).
-    let start = (0..vm.row_count())
-        .find(|&r| {
-            vm.row_data(r)
-                .map(|b| b.messageId == mid.as_str())
-                .unwrap_or(false)
-        });
+    let start = (0..vm.row_count()).find(|&r| {
+        vm.row_data(r)
+            .map(|b| b.messageId == mid.as_str())
+            .unwrap_or(false)
+    });
     match start {
         None => {
             for b in blocks {
@@ -123,7 +122,7 @@ fn now_time() -> String {
             if libc_localtime_r(&t, &mut tm).is_null() {
                 return utc_hhmm(secs);
             }
-            return format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
+            format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
         }
     }
     #[cfg(not(unix))]
@@ -165,10 +164,7 @@ extern "C" {
 }
 
 #[cfg(unix)]
-unsafe fn libc_localtime_r(
-    time: *const LibcTimeT,
-    result: *mut libc_tm,
-) -> *mut libc_tm {
+unsafe fn libc_localtime_r(time: *const LibcTimeT, result: *mut libc_tm) -> *mut libc_tm {
     localtime_r(time, result)
 }
 
@@ -380,7 +376,7 @@ pub fn run_app() -> anyhow::Result<()> {
                         format!("{} · {}", s.model, short_basename(&s.cwd))
                     };
                     app.set_activeSessionSub(sub.into());
-                    app.set_activeState(s.state.clone().into());
+                    app.set_activeState(s.state.clone());
                     // Seed busy from the session's current state so opening a
                     // session whose turn is already running (started on another
                     // device) shows the replying status at once; the live
@@ -399,8 +395,8 @@ pub fn run_app() -> anyhow::Result<()> {
             let net = net.clone();
             let msg = serde_json::json!({ "op": "refresh" });
             net.send(NetCmd::Send(msg.to_string()));
-       });
-   }
+        });
+    }
 
     // --- suggestion chip tap: fill the composer (user can edit before send) ---
     {
@@ -452,25 +448,31 @@ pub fn run_app() -> anyhow::Result<()> {
             let all = app.get_allSessions();
             let filter = app.get_drawerFilter().to_lowercase();
             let filtered: Vec<SessionInfo> = if filter.trim().is_empty() {
-                all.iter().map(|si| SessionInfo {
-                    id: si.id.clone(),
-                    name: si.name.clone(),
-                    cwd: si.cwd.clone(),
-                    model: si.model.clone(),
-                    state: si.state.clone(),
-                    attached: si.attached,
-                }).collect()
+                all.iter()
+                    .map(|si| SessionInfo {
+                        id: si.id.clone(),
+                        name: si.name.clone(),
+                        cwd: si.cwd.clone(),
+                        model: si.model.clone(),
+                        state: si.state.clone(),
+                        attached: si.attached,
+                    })
+                    .collect()
             } else {
-                all.iter().filter(|si| {
-                    si.name.to_lowercase().contains(&filter) || si.cwd.to_lowercase().contains(&filter)
-                }).map(|si| SessionInfo {
-                    id: si.id.clone(),
-                    name: si.name.clone(),
-                    cwd: si.cwd.clone(),
-                    model: si.model.clone(),
-                    state: si.state.clone(),
-                    attached: si.attached,
-                }).collect()
+                all.iter()
+                    .filter(|si| {
+                        si.name.to_lowercase().contains(&filter)
+                            || si.cwd.to_lowercase().contains(&filter)
+                    })
+                    .map(|si| SessionInfo {
+                        id: si.id.clone(),
+                        name: si.name.clone(),
+                        cwd: si.cwd.clone(),
+                        model: si.model.clone(),
+                        state: si.state.clone(),
+                        attached: si.attached,
+                    })
+                    .collect()
             };
             app.set_sessions(model_rc(filtered));
         });
@@ -514,9 +516,7 @@ pub fn run_app() -> anyhow::Result<()> {
             std::time::Duration::from_millis(1200),
             move || {
                 let Some(app) = weak.upgrade() else { return };
-                if app.get_view().as_str() == "pairing"
-                    && app.get_pairLinkText().is_empty()
-                {
+                if app.get_view().as_str() == "pairing" && app.get_pairLinkText().is_empty() {
                     #[cfg(not(target_os = "android"))]
                     {
                         let looks_like_link = arboard::Clipboard::new()
@@ -525,8 +525,7 @@ pub fn run_app() -> anyhow::Result<()> {
                             .map(|t| {
                                 let t = t.trim();
                                 t.starts_with("synapse://")
-                                    || (t.starts_with("http")
-                                        && t.contains("token="))
+                                    || (t.starts_with("http") && t.contains("token="))
                                     || (t.contains("://") && t.contains("token="))
                             })
                             .unwrap_or(false);
@@ -638,8 +637,8 @@ fn handle_event(app: &App, msg: serde_json::Value) {
                 let model = s
                     .get("model")
                     .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                    .unwrap_or("")
+                    .to_string();
                 app.set_activeSessionId(id.into());
                 app.set_activeSessionName(name.into());
                 let cwd = s.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
@@ -754,7 +753,7 @@ fn auto_select_if_needed(app: &App) {
             format!("{} · {}", s.model, short_basename(&s.cwd))
         };
         app.set_activeSessionSub(sub.into());
-        app.set_activeState(s.state.clone().into());
+        app.set_activeState(s.state.clone());
     }
 }
 
@@ -1130,7 +1129,11 @@ fn short_basename(p: &str) -> String {
     if p.is_empty() {
         return String::new();
     }
-    p.trim_end_matches('/').rsplit('/').next().unwrap_or(p).to_string()
+    p.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(p)
+        .to_string()
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -1202,7 +1205,6 @@ fn dispatch_event(app: &App, evt: &serde_json::Value) {
         "stream_event" => {
             // Parse into state + mark dirty; the render timer flushes ~30x/sec.
             STREAM.with(|cell| cell.borrow_mut().apply(evt));
-            return;
         }
         "assistant" => {
             let mid = evt
@@ -1230,17 +1232,14 @@ fn dispatch_event(app: &App, evt: &serde_json::Value) {
                     cell.borrow_mut().reset();
                 }
             });
-            return;
         }
         "result" => {
             app.set_busy(false);
             app.set_activeState("idle".into());
             STREAM.with(|cell| cell.borrow_mut().reset());
-            return;
         }
         "user" => {
             append_live_user(app, evt);
-            return;
         }
         "stderr" => {
             if let Some(text) = evt.get("text").and_then(|v| v.as_str()) {
@@ -1248,7 +1247,6 @@ fn dispatch_event(app: &App, evt: &serde_json::Value) {
                     push_live_system_error(app, text);
                 }
             }
-            return;
         }
         _ => {}
     }
@@ -1258,10 +1256,7 @@ fn dispatch_event(app: &App, evt: &serde_json::Value) {
 /// splitting text markdown into text/code rows (so fenced code renders as cards).
 fn assemble_assistant_blocks(message_id: &str, evt: &serde_json::Value) -> Vec<MsgBlock> {
     let mut out = Vec::new();
-    let Some(content) = evt
-        .pointer("/message/content")
-        .and_then(|c| c.as_array())
-    else {
+    let Some(content) = evt.pointer("/message/content").and_then(|c| c.as_array()) else {
         return out;
     };
     for (i, block) in content.iter().enumerate() {
@@ -1286,7 +1281,11 @@ fn assemble_assistant_blocks(message_id: &str, evt: &serde_json::Value) -> Vec<M
                 }
             }
             "tool_use" => {
-                let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = block
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let name = block
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -1310,7 +1309,11 @@ fn assemble_assistant_blocks(message_id: &str, evt: &serde_json::Value) -> Vec<M
                 out.push(MsgBlock {
                     kind: "thinking".into(),
                     role: "assistant".into(),
-                    text: block.get("thinking").and_then(|v| v.as_str()).unwrap_or("").into(),
+                    text: block
+                        .get("thinking")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .into(),
                     toolName: "".into(),
                     toolStatus: "".into(),
                     expanded: false,
@@ -1337,7 +1340,9 @@ fn append_live_user(app: &App, evt: &serde_json::Value) {
         .and_then(|arr| {
             arr.iter().find_map(|b| {
                 if b.get("type").and_then(|v| v.as_str()) == Some("text") {
-                    b.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    b.get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -1441,7 +1446,9 @@ pub extern "C" fn synapse_web_url() -> *mut std::os::raw::c_char {
     let host = std::env::var("SYNAPSE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let sport = std::env::var("SYNAPSE_PORT").unwrap_or_else(|_| "4173".into());
     let token = std::env::var("SYNAPSE_TOKEN").unwrap_or_default();
-    let tls = std::env::var("SYNAPSE_TLS").map(|v| v == "1").unwrap_or(false);
+    let tls = std::env::var("SYNAPSE_TLS")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let url = format!(
         "http://127.0.0.1:{port}/?host={host}&port={sport}&token={token}&tls={}",
         if tls { "1" } else { "0" }
@@ -1512,6 +1519,12 @@ pub struct StreamState {
     pub dirty: bool,
 }
 
+impl Default for StreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamState {
     pub fn new() -> Self {
         Self {
@@ -1554,17 +1567,12 @@ impl StreamState {
     /// a top-level `assistant`/`user`/`result`/`system` frame).
     pub fn apply(&mut self, evt: &serde_json::Value) {
         let ty = evt.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        match ty {
-            "stream_event" => {
-                self.apply_anthropic_event(
-                    evt.get("event").unwrap_or(&serde_json::Value::Null),
-                );
-                self.dirty = true;
-            }
-            // Final `assistant` frame: message is authoritative-complete. We keep
-            // the streamed blocks; the flush layer reconciles/replaces by id.
-            // (No state mutation needed beyond not resetting mid-message.)
-            _ => {}
+        // Only `stream_event` deltas mutate StreamState. A final `assistant` frame
+        // is authoritative-complete: keep the streamed blocks (the flush layer
+        // reconciles/replaces by id); other frames need no StreamState mutation.
+        if ty == "stream_event" {
+            self.apply_anthropic_event(evt.get("event").unwrap_or(&serde_json::Value::Null));
+            self.dirty = true;
         }
     }
 
@@ -1593,23 +1601,30 @@ impl StreamState {
                     return;
                 }
                 // Render kind: Anthropic "tool_use" -> MsgBlock kind "tool".
-                let kind = match bt { "tool_use" => "tool", other => other };
+                let kind = match bt {
+                    "tool_use" => "tool",
+                    other => other,
+                };
                 let mut block = default_block(kind, &self.message_id, idx);
                 match bt {
                     "tool_use" => {
-                        block.toolName =
-                            cb.get("name").and_then(|v| v.as_str()).unwrap_or("tool").into();
-                        block.toolId =
-                            cb.get("id").and_then(|v| v.as_str()).unwrap_or("").into();
+                        block.toolName = cb
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("tool")
+                            .into();
+                        block.toolId = cb.get("id").and_then(|v| v.as_str()).unwrap_or("").into();
                         block.toolStatus = "running".into();
                     }
                     "thinking" => {
-                        block.text =
-                            cb.get("thinking").and_then(|v| v.as_str()).unwrap_or("").into();
+                        block.text = cb
+                            .get("thinking")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .into();
                     }
                     "text" => {
-                        block.text =
-                            cb.get("text").and_then(|v| v.as_str()).unwrap_or("").into();
+                        block.text = cb.get("text").and_then(|v| v.as_str()).unwrap_or("").into();
                     }
                     _ => {}
                 }
@@ -1621,7 +1636,8 @@ impl StreamState {
                 let dt = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 // Open the block lazily if a start was missed.
                 if self.get_block_mut(idx).is_none() {
-                    self.blocks.push((idx, default_block("text", &self.message_id, idx)));
+                    self.blocks
+                        .push((idx, default_block("text", &self.message_id, idx)));
                 }
                 let pos = match self.blocks.iter().position(|(i, _)| *i == idx) {
                     Some(p) => p,
@@ -1634,10 +1650,7 @@ impl StreamState {
                         block.text = format!("{}{}", block.text, t).into();
                     }
                     "thinking_delta" => {
-                        let t = delta
-                            .get("thinking")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let t = delta.get("thinking").and_then(|v| v.as_str()).unwrap_or("");
                         let block = &mut self.blocks[pos].1;
                         block.text = format!("{}{}", block.text, t).into();
                     }
@@ -1686,11 +1699,9 @@ fn default_block(kind: &str, message_id: &str, idx: usize) -> MsgBlock {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn split_pure_prose() {
@@ -1784,8 +1795,8 @@ mod tests {
         normalize_code_blocks(&mut msgs);
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].kind, "tool");
-       assert_eq!(msgs[1].kind, "text"); // user text never split
-   }
+        assert_eq!(msgs[1].kind, "text"); // user text never split
+    }
 
     #[test]
     fn short_basename_basic() {
@@ -1836,7 +1847,11 @@ mod tests {
         assert_eq!(b.toolStatus, "running");
         s.apply(&se(r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls -la\"}"}}}"#));
         let b = s.block_at(0).unwrap();
-        assert!(b.text.contains("ls -la"), "preview should contain the command, got: {}", b.text);
+        assert!(
+            b.text.contains("ls -la"),
+            "preview should contain the command, got: {}",
+            b.text
+        );
     }
 
     #[test]
@@ -1869,10 +1884,14 @@ mod tests {
     #[test]
     fn stream_unknown_event_is_noop() {
         let mut s = StreamState::new();
-        s.apply(&se(r#"{"type":"stream_event","event":{"type":"ping","index":0}}"#));
+        s.apply(&se(
+            r#"{"type":"stream_event","event":{"type":"ping","index":0}}"#,
+        ));
         assert_eq!(s.block_count(), 0);
         // Non-stream_event frames are ignored by the parser (handled elsewhere).
-        s.apply(&se(r#"{"type":"assistant","message":{"id":"x","content":[]}}"#));
+        s.apply(&se(
+            r#"{"type":"assistant","message":{"id":"x","content":[]}}"#,
+        ));
         assert_eq!(s.block_count(), 0);
     }
 
@@ -1925,7 +1944,9 @@ mod pair_tests {
     #[test]
     fn parse_relay_link_with_connect_path() {
         // Relay pairing URL: synapse://relay.example.com/connect?deviceId=abc&token=t&tls=1
-        let p = parse_pair_link("synapse://relay.example.com/connect?deviceId=abc123&token=xyz&tls=1").unwrap();
+        let p =
+            parse_pair_link("synapse://relay.example.com/connect?deviceId=abc123&token=xyz&tls=1")
+                .unwrap();
         assert_eq!(p.host, "relay.example.com");
         assert_eq!(p.port, "443"); // relay uses standard wss port
         assert_eq!(p.token, "xyz");
