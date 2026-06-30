@@ -1398,6 +1398,36 @@ pub extern "C" fn synapse_ios_main() {
     let _ = run_app();
 }
 
+/// Start the embedded web chat host and return the URL the iOS WKWebView should
+/// load, as a malloc'd C string the caller must `free`. The URL carries the
+/// pairing credentials as query params so the web app connects without a
+/// JS<->native bridge. Reads SYNAPSE_HOST/PORT/TOKEN/TLS from the environment
+/// (the iOS entry sets these; a real pairing flow would set them post-scan).
+///
+/// Returns null on host-start failure. The host runs for the process lifetime.
+///
+/// NOTE: Not yet exercised on-device — the iOS WKWebView host (mobile/ios) that
+/// calls this needs an Xcode build to verify end-to-end.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn synapse_web_url() -> *mut std::os::raw::c_char {
+    let port = match web::spawn_host() {
+        Ok(p) => p,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let host = std::env::var("SYNAPSE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let sport = std::env::var("SYNAPSE_PORT").unwrap_or_else(|_| "4173".into());
+    let token = std::env::var("SYNAPSE_TOKEN").unwrap_or_default();
+    let tls = std::env::var("SYNAPSE_TLS").map(|v| v == "1").unwrap_or(false);
+    let url = format!(
+        "http://127.0.0.1:{port}/?host={host}&port={sport}&token={token}&tls={}",
+        if tls { "1" } else { "0" }
+    );
+    std::ffi::CString::new(url)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
 // UI-thread-local weak handle to the App, used by the iOS keyboard-frame
 // observer to drive `keyboardInset`. UIKit delivers keyboard notifications on
 // the main (== UI) thread, so this never crosses threads.

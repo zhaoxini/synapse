@@ -121,7 +121,7 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC");
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit");
 				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/../../target/aarch64-apple-ios/release";
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
@@ -144,7 +144,7 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC");
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit");
 				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/../../target/aarch64-apple-ios/release";
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
