@@ -2,41 +2,36 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <!-- mobile: fit viewport, no zoom, uses available height. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="color-scheme" content="dark light" />
   <title>Synapse</title>
-  <!-- code highlight theme follows the system scheme (Synara swaps code theme with the app theme) -->
   <link rel="stylesheet" href="vendor/github.min.css" media="(prefers-color-scheme: light)" />
   <link rel="stylesheet" href="vendor/github-dark.min.css" media="(prefers-color-scheme: dark)" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
-  <!-- Top bar -->
   <header id="topbar">
-    <button id="drawerBtn" class="iconbtn" aria-label="Sessions">☰</button>
+    <button id="drawerBtn" class="iconbtn" aria-label="Sessions">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
     <div id="title">
       <div id="titleName">Synapse</div>
-      <div id="titleSub"><span id="dot"></span><span id="subText">no session</span></div>
     </div>
-    <button id="newBtn" class="iconbtn" aria-label="New session">＋</button>
+    <button id="newBtn" class="iconbtn" aria-label="New session">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="4" cy="10" r="1.2" fill="currentColor"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/><circle cx="16" cy="10" r="1.2" fill="currentColor"/></svg>
+    </button>
   </header>
 
-  <!-- Reconnect banner -->
   <div id="reconnect">Reconnecting…</div>
-
-  <!-- Toast -->
   <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
 
-  <!-- Message list -->
   <main id="scroller">
     <div id="messages"></div>
   </main>
 
-  <!-- "new messages" pill -->
   <button id="newPill">↓ New</button>
 
-  <!-- Empty state — Synara: logo + "Let's build" -->
   <div id="empty">
     <div class="brand">✦</div>
     <h1>Let's build</h1>
@@ -48,22 +43,28 @@
     </div>
   </div>
 
-  <!-- Composer — Synara stacked panel: input + bottom control row -->
   <footer id="composer">
-    <div id="composerRow">
-      <textarea id="input" rows="1" placeholder="Ask for follow-up changes or attach images"></textarea>
-      <div id="composerControls">
-        <span class="ctl" id="localCtl"><span class="ico">⎇</span><span id="localLabel">Local</span></span>
-        <span class="ctl" id="modelCtl"><span class="ico">◆</span><span id="modelLabel">Model</span></span>
-        <span class="spacer"></span>
-        <button id="sendBtn" aria-label="Send">↑</button>
+    <div id="composerDock">
+      <div id="composerRow">
+        <textarea id="input" rows="1" placeholder="Follow up…"></textarea>
+        <div id="composerControls">
+          <button id="attachBtn" class="dock-btn" aria-label="More">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+          <button class="dock-btn dock-text" id="modelCtl"><span id="modelLabel">Auto</span></button>
+          <span class="spacer"></span>
+          <button id="sendBtn" aria-label="Send">
+            <svg class="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/></svg>
+          </button>
+        </div>
       </div>
     </div>
     <div id="modelMenu" class="model-menu"></div>
     <div id="localMenu" class="model-menu"></div>
+    <div id="attachMenu" class="model-menu"></div>
   </footer>
 
-  <!-- Drawer overlay -->
   <div id="drawerMask"></div>
   <aside id="drawer">
     <div id="drawerHead">
@@ -75,6 +76,16 @@
     <input id="search" type="text" placeholder="Search sessions" />
     <div id="sessionList"></div>
   </aside>
+
+  <div id="sheetMask"></div>
+  <div id="bottomSheet">
+    <div id="sheetHandle"></div>
+    <div id="sheetHead">
+      <button id="sheetClose" aria-label="Close">✕</button>
+      <span id="sheetTitle"></span>
+    </div>
+    <div id="sheetBody"></div>
+  </div>
 
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>

@@ -302,58 +302,176 @@ function splitTurn(tn) {
   return { replyText: "", workItems: tn.order };
 }
 
-// Render the active turn. `settled` collapses the work region into a
-// "Worked for Xs ›" disclosure (Synara style); while running it shows live.
+// Render the active turn. `settled` collapses work into a single summary line
+// (Cursor style); while running it shows live status lines.
 function renderTurn(settled) {
   const tn = state.turn;
   if (!tn) return;
   const { replyText, workItems } = splitTurn(tn);
   const hasWork = workItems.length > 0;
 
-  // ----- work region -----
   tn.workWrap.innerHTML = "";
   if (hasWork) {
     if (settled) {
-      // collapsed: one "Worked for Xs ›" row + hairline; expand to reveal items
-      const wrap = document.createElement("div"); wrap.className = "worked";
-      const trig = document.createElement("button"); trig.className = "worked-trig";
-      // elapsed: live timer (ticks) if present, else frame-timestamp span (history)
       const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
       const secs = tn.ticks > 0 ? tn.ticks : tsSecs;
-      const label = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
-      trig.innerHTML = `<span>${label}</span><span class="chev">▸</span>`;
-      const panel = document.createElement("div"); panel.className = "worked-panel";
-      buildWorkItems(panel, workItems, tn);
-      trig.addEventListener("click", () => {
-        wrap.classList.toggle("open");
-      });
-      wrap.appendChild(trig); wrap.appendChild(panel);
-      tn.workWrap.appendChild(wrap);
-      const hr = document.createElement("div"); hr.className = "hr";
-      tn.workWrap.appendChild(hr);
+      const summary = summarizeWork(workItems, tn, secs);
+      const line = statusLine(summary, () => openWorkSheet(workItems, tn, secs));
+      line.className = "status-line work-summary";
+      tn.workWrap.appendChild(line);
     } else {
-      // live: show work items inline (thinking card + running tool cards)
-      buildWorkItems(tn.workWrap, workItems, tn);
+      buildWorkItems(tn.workWrap, workItems, tn, false);
     }
   }
 
-  // ----- reply region -----
   tn.replyWrap.innerHTML = "";
   if (replyText) tn.replyWrap.appendChild(mdEl(replyText));
 }
 
-function buildWorkItems(container, items, tn) {
+function buildWorkItems(container, items, tn, settled) {
   for (const it of items) {
     if (it.kind === "thinking") {
-      container.appendChild(cardEl("thinking", "✦", "Thinking", null, it.text));
+      const secs = thinkingSecs(tn);
+      const running = !settled && isThinkingActive(tn, it);
+      const line = statusLine(thinkingLabel(secs, running), () => openThinkingSheet(it.text, secs));
+      if (running) line.classList.add("running");
+      container.appendChild(line);
     } else if (it.kind === "text") {
-      container.appendChild(mdEl(it.text));   // earlier (non-trailing) reply text
+      container.appendChild(mdEl(it.text));
     } else if (it.kind === "tool") {
       const t = tn.tools.get(it.id);
       if (!t) continue;
-      container.appendChild(toolCard(t));
+      const line = statusLine(toolStatusLabel(t), () => openToolSheet(t));
+      if (t.status === "running") line.classList.add("running");
+      container.appendChild(line);
     }
   }
+}
+
+function statusLine(label, onClick) {
+  const btn = document.createElement("button");
+  btn.className = "status-line";
+  btn.textContent = label;
+  if (onClick) btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function thinkingSecs(tn) {
+  const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
+  return tn.ticks > 0 ? tn.ticks : tsSecs;
+}
+
+function isThinkingActive(tn, thinkingItem) {
+  const idx = tn.order.indexOf(thinkingItem);
+  const after = tn.order.slice(idx + 1);
+  return after.length === 0 || after.every(x => x.kind === "thinking");
+}
+
+function thinkingLabel(secs, running) {
+  if (running) return "Thinking…";
+  return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+}
+
+function toolStatusLabel(t) {
+  const meta = toolMeta(t);
+  const sub = meta.sub ? ` ${meta.sub}` : "";
+  if (t.status === "running") {
+    if (t.name === "Task") return `Running task${sub}…`;
+    return `Running ${meta.title.toLowerCase()}${sub}…`;
+  }
+  if (t.name === "Task") return `Completed task${sub}`;
+  if (["Read", "LS", "Glob", "Grep"].includes(t.name)) return `Explored${sub || " files"}`;
+  if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(t.name)) return `Edited${sub}`;
+  if (t.name === "Bash") return `Ran${sub || " command"}`;
+  if (t.name === "WebSearch") return `Searched${sub}`;
+  if (t.name === "WebFetch") return `Fetched${sub}`;
+  if (t.name === "TodoWrite") return "Updated plan";
+  if (t.name === "AskUserQuestion") return `Asked${sub}`;
+  if (t.name === "ExitPlanMode" || t.name === "exit_plan_mode") return "Proposed plan";
+  return `Used ${meta.title.toLowerCase()}${sub}`;
+}
+
+function summarizeWork(items, tn, secs) {
+  let files = 0, searches = 0, edits = 0, other = 0, hasThinking = false;
+  for (const it of items) {
+    if (it.kind === "thinking") { hasThinking = true; continue; }
+    if (it.kind !== "tool") continue;
+    const t = tn.tools.get(it.id);
+    if (!t) continue;
+    if (["Read", "LS"].includes(t.name)) files++;
+    else if (["Grep", "Glob", "WebSearch"].includes(t.name)) searches++;
+    else if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(t.name)) edits++;
+    else other++;
+  }
+  const parts = [];
+  if (files) parts.push(`${files} file${files > 1 ? "s" : ""}`);
+  if (searches) parts.push(`${searches} search${searches > 1 ? "es" : ""}`);
+  if (edits) parts.push(`${edits} edit${edits > 1 ? "s" : ""}`);
+  if (other) parts.push(`${other} other tool${other > 1 ? "s" : ""}`);
+  if (parts.length) return `Explored ${parts.join(", ")}`;
+  if (hasThinking) return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+  return secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+}
+
+// Bottom sheet for expanded thinking / tool / work details
+function openSheet(title, content) {
+  $("sheetTitle").textContent = title;
+  const body = $("sheetBody");
+  body.innerHTML = "";
+  if (typeof content === "string") {
+    const pre = document.createElement("div");
+    pre.className = "sheet-thinking";
+    pre.textContent = content;
+    body.appendChild(pre);
+  } else {
+    body.appendChild(content);
+  }
+  $("sheetMask").classList.add("show");
+  $("bottomSheet").classList.add("show");
+}
+function closeSheet() {
+  $("sheetMask").classList.remove("show");
+  $("bottomSheet").classList.remove("show");
+}
+function openThinkingSheet(text, secs) {
+  openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", text || "No details.");
+}
+function openToolSheet(t) {
+  const meta = toolMeta(t);
+  const wrap = document.createElement("div");
+  const card = toolCard(t);
+  card.classList.add("open");
+  wrap.appendChild(card);
+  openSheet(meta.title + (meta.sub ? ` · ${meta.sub}` : ""), wrap);
+}
+function openWorkSheet(items, tn, secs) {
+  const wrap = document.createElement("div");
+  for (const it of items) {
+    const block = document.createElement("div");
+    block.className = "sheet-item";
+    const lbl = document.createElement("div");
+    lbl.className = "sheet-item-label";
+    if (it.kind === "thinking") {
+      lbl.textContent = thinkingLabel(secs, false);
+      const pre = document.createElement("div");
+      pre.className = "sheet-thinking";
+      pre.textContent = it.text;
+      block.appendChild(lbl); block.appendChild(pre);
+    } else if (it.kind === "tool") {
+      const t = tn.tools.get(it.id);
+      if (!t) continue;
+      lbl.textContent = toolStatusLabel(t);
+      block.appendChild(lbl);
+      block.appendChild(toolCard(t));
+    } else if (it.kind === "text") {
+      lbl.textContent = "Draft";
+      block.appendChild(lbl);
+      block.appendChild(mdEl(it.text));
+    }
+    wrap.appendChild(block);
+  }
+  const title = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+  openSheet(title, wrap);
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -659,7 +777,7 @@ function currentMode() {
   const s = state.sessions.find(x => x.id === state.activeId);
   return (s ? s.permission_mode : state.pendingMode) || "default";
 }
-function syncPermLabel() { const el = $("permLabel"); if (el) el.textContent = permLabelFor(currentMode()); }
+function syncPermLabel() { /* permission mode shown in attach menu */ }
 function chooseMode(mode) {
   closeMenus();
   if (state.activeId) {
@@ -671,21 +789,33 @@ function chooseMode(mode) {
   }
   syncPermLabel();
 }
-function initPermPill() {
-  const controls = $("composerControls"); if (!controls || $("permCtl")) return;
-  const pill = document.createElement("span");
-  pill.className = "ctl"; pill.id = "permCtl";
-  pill.innerHTML = `<span class="ico">⚑</span><span id="permLabel">Ask</span>`;
-  controls.insertBefore(pill, controls.querySelector(".spacer"));
+function initAttachMenu() {
+  const btn = $("attachBtn");
+  if (!btn) return;
   const menu = document.createElement("div");
   menu.className = "model-menu"; menu.id = "permMenu";
   $("composer").appendChild(menu);
-  pill.addEventListener("click", (e) => {
+  btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleMenu("permMenu", () => openMenu("permMenu",
-      PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, ""));
+    toggleMenu("attachMenu", openAttachMenu);
   });
-  syncPermLabel();
+}
+function openAttachMenu() {
+  closeMenus();
+  const menu = $("attachMenu");
+  menu.innerHTML = "";
+  const addRow = (label, onClick) => {
+    const row = document.createElement("div");
+    row.className = "model-item";
+    row.innerHTML = `<span>${escapeHtml(label)}</span>`;
+    row.addEventListener("click", (e) => { e.stopPropagation(); closeMenus(); onClick(); });
+    menu.appendChild(row);
+  };
+  addRow(`Project · ${basename(currentCwd()) || "Local"}`, () => openLocalMenu());
+  addRow(`Permissions · ${permLabelFor(currentMode())}`, () => {
+    openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
+  });
+  menu.classList.add("show");
 }
 
 function ingestResult(evt) {
@@ -973,9 +1103,9 @@ $("newPill").addEventListener("click", () => {
 function setBusy(b) {
   state.busy = b;
   sendBtn.classList.toggle("busy", b);
-  sendBtn.textContent = b ? "■" : "↑";
-  dot.classList.toggle("busy", b);
+  if (dot) dot.classList.toggle("busy", b);
   updatePulse();
+  updateSend();
 }
 // The typing indicator shows while the turn is busy and working — before the
 // first token, while thinking, and while any tool runs. It hides only once the
@@ -995,7 +1125,7 @@ function updatePulse() {
     if (!pulseEl) {
       pulseEl = document.createElement("div");
       pulseEl.className = "msg assistant pulse-row";
-      pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
+      pulseEl.innerHTML = `<div class="body"><span class="status-line running">Thinking…</span></div>`;
     }
     messagesEl.appendChild(pulseEl); // move to end (after work items)
     emptyEl.classList.add("hidden");
@@ -1160,11 +1290,6 @@ function select(id) {
   const s = state.sessions.find(x => x.id === id);
   if (s) {
     titleName.textContent = cleanTitle(s.name);
-    subText.textContent = s.model ? labelForModel(s.model) : (s.cwd || "session");
-    dot.className = s.state === "busy" ? "busy" : (s.state === "error" ? "error" : "");
-    // Composer pills + empty-state subtitle reflect the active session. Both pills
-    // derive from currentCwd()/currentModelId() — the SAME source the pickers use to
-    // mark a row selected — so the label and the checkmark can never drift apart.
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
@@ -1181,13 +1306,14 @@ function select(id) {
 // =================== composer ===================
 function autoGrow() {
   inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
   updateSend();
 }
 function updateSend() {
   const has = inputEl.value.trim().length > 0;
-  if (state.busy) { sendBtn.className = "busy"; sendBtn.textContent = "■"; }
-  else { sendBtn.className = has ? "active" : ""; sendBtn.textContent = "↑"; }
+  sendBtn.classList.remove("active", "busy");
+  if (state.busy) sendBtn.classList.add("busy");
+  else if (has) sendBtn.classList.add("active");
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
@@ -1266,7 +1392,9 @@ function currentCwd() {
   return (s ? s.cwd : state.pendingCwd) || "";
 }
 function syncModelLabel() {
-  const ml = $("modelLabel"); if (ml) ml.textContent = labelForModel(currentModelId());
+  const ml = $("modelLabel");
+  const id = currentModelId();
+  if (ml) ml.textContent = id ? labelForModel(id) : "Auto";
 }
 function syncLocalLabel() {
   const ll = $("localLabel"); const c = currentCwd();
@@ -1275,6 +1403,7 @@ function syncLocalLabel() {
 function closeMenus() {
   $("modelMenu").classList.remove("show");
   $("localMenu").classList.remove("show");
+  const am = $("attachMenu"); if (am) am.classList.remove("show");
   const pm = $("permMenu"); if (pm) pm.classList.remove("show");
 }
 // Render `items` ([{id,label,title?}]) into menu `id`, marking `cur` selected.
@@ -1353,10 +1482,7 @@ function openLocalMenu() {
   if (sel) sel.scrollIntoView({ block: "nearest" });
   inp.focus();
 }
-$("localCtl").addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleMenu("localMenu", openLocalMenu);
-});
+// local picker opened from attach (+) menu
 document.addEventListener("click", closeMenus);
 
 // =================== toast ===================
@@ -1389,9 +1515,9 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
-// Dev/debug hooks: expose the inbound dispatcher + state for inspection. Harmless
-// in production; lets tooling drive synthetic frames without a live API.
-initPermPill();
+initAttachMenu();
+$("sheetClose").addEventListener("click", closeSheet);
+$("sheetMask").addEventListener("click", closeSheet);
 window.__synapse = { handle, handleEvent, state };
 connect();
 })();

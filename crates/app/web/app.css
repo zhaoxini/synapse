@@ -1,51 +1,48 @@
-/* Synapse chat — Synara "codex" theme replica.
-   Colors are the EXACT tokens produced by Synara's own theme engine
-   (apps/web/src/theme/theme.logic.ts, codex seed) — see docs/synara-theme-tokens.txt.
-   Default is codex dark; codex light follows the system via prefers-color-scheme. */
+/* Synapse chat — Cursor-inspired mobile theme.
+   True-black dark default; light mode follows system preference. */
 
 :root {
-  /* codex DARK (default) */
-  --bg: #0e0e0e;              /* surface-under / app background */
-  --surface: #111111;          /* primary surface (sidebar, header) */
-  --panel: #1c1c1c;            /* cards / popovers */
-  --elevated: rgb(47, 47, 47); /* elevated primary (menus) */
-  --control: rgb(38, 38, 38);  /* inputs / composer surface */
-  --code-bg: #212121;          /* code block background */
+  --bg: #000000;
+  --surface: #000000;
+  --panel: #1c1c1e;
+  --elevated: #2c2c2e;
+  --control: #1c1c1e;
+  --code-bg: #1c1c1e;
 
-  --ink: #fcfcfc;              /* foreground */
-  --ink-2: rgba(252, 252, 252, 0.71);   /* secondary text */
-  --ink-3: rgba(252, 252, 252, 0.498);  /* tertiary text */
+  --ink: #f5f5f7;
+  --ink-2: rgba(245, 245, 247, 0.62);
+  --ink-3: rgba(245, 245, 247, 0.42);
 
-  --border: rgba(252, 252, 252, 0.124);
-  --border-light: rgba(252, 252, 252, 0.072);
-  --border-heavy: rgba(252, 252, 252, 0.196);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-light: rgba(255, 255, 255, 0.06);
+  --border-heavy: rgba(255, 255, 255, 0.16);
 
-  --accent: #0169cc;                       /* base accent (badges, info) */
-  --accent-text: rgb(100, 164, 224);       /* accent text / links / icons */
-  --accent-bg: #001a33;                    /* accent background fill */
-  --focus-border: rgba(100, 164, 224, 0.76);
+  --accent: #0a84ff;
+  --accent-text: #64b5f6;
+  --accent-bg: rgba(10, 132, 255, 0.12);
+  --focus-border: rgba(255, 255, 255, 0.2);
 
-  --user-msg: rgba(252, 252, 252, 0.052);  /* user message background */
-  --btn-secondary: rgba(252, 252, 252, 0.052);
-  --btn-secondary-hover: rgba(252, 252, 252, 0.078);
-  --primary: #fcfcfc;          /* primary button (white-on-dark) */
-  --primary-fg: #111111;
+  --user-msg: #2c2c2e;
+  --btn-secondary: rgba(255, 255, 255, 0.06);
+  --btn-secondary-hover: rgba(255, 255, 255, 0.1);
+  --primary: #ffffff;
+  --primary-fg: #000000;
 
-  --success: #00a240;
-  --danger: #e02e2a;
-  --warning: #f5b44a;
+  --success: #30d158;
+  --danger: #ff453a;
+  --warning: #ffd60a;
 
-  /* structure — from Synara index.css */
-  --radius: 0.625rem;                /* 10px base */
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-card: 0.65rem;            /* tool/file cards */
-  --radius-user: 0.8rem;             /* user message bubble */
-  --font-size: 13px;                 /* chat transcript (Synara default 12; 13 reads better on phone) */
-  --line: 1.625;                     /* leading-relaxed */
+  --radius: 0.625rem;
+  --radius-sm: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-user: 1.125rem;
+  --radius-composer: 1.375rem;
+  --font-size: 15px;
+  --line: 1.55;
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, monospace;
 
-  --topbar-h: 48px;
+  --topbar-h: 44px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -88,26 +85,24 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
 textarea { font: inherit; }
 
-/* ---------- top bar ---------- */
+/* ---------- top bar (Cursor: minimal, title only) ---------- */
 #topbar {
   flex: 0 0 auto; height: calc(var(--topbar-h) + var(--safe-top));
   padding-top: var(--safe-top);
   display: flex; align-items: center;
-  background: var(--surface); border-bottom: 1px solid var(--border-light);
+  background: var(--surface);
 }
 .iconbtn {
-  width: 40px; height: 40px; font-size: 17px; color: var(--ink-2);
-  display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm);
-  transition: color .15s, background .15s;
+  width: 44px; height: 44px; color: var(--ink);
+  display: flex; align-items: center; justify-content: center; border-radius: 50%;
+  transition: background .15s;
 }
-.iconbtn:hover { color: var(--ink); background: var(--btn-secondary-hover); }
+.iconbtn:hover { background: var(--btn-secondary-hover); }
+.iconbtn:active { background: var(--btn-secondary); }
 #title { flex: 1; text-align: center; overflow: hidden; padding: 0 4px; }
-#titleName { font-weight: 550; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
-#titleSub { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 1px; }
-#titleSub #subText { font-size: 11px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
-#dot.busy { background: var(--warning); }
-#dot.error { background: var(--danger); }
+#titleName { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+#titleSub { display: none; }
+#dot { display: none; }
 
 /* ---------- banners ---------- */
 #reconnect {
@@ -126,18 +121,16 @@ textarea { font: inherit; }
 
 /* ---------- messages ---------- */
 #scroller { flex: 1 1 0; overflow-y: auto; overflow-x: hidden; position: relative; background: var(--bg); }
-#messages { padding: 14px 14px 8px; display: flex; flex-direction: column; max-width: 760px; margin: 0 auto; width: 100%; }
+#messages { padding: 12px 16px 16px; display: flex; flex-direction: column; max-width: 760px; margin: 0 auto; width: 100%; }
 
-/* assistant block — full width, no avatar (Synara style) */
-.msg { margin-bottom: 14px; }
+.msg { margin-bottom: 20px; }
 .msg.assistant .body { color: var(--ink); }
 
-/* user message — right-aligned compact block, max 280px, no avatar */
 .msg.user { display: flex; justify-content: flex-end; }
 .msg.user .bubble {
   background: var(--user-msg); border-radius: var(--radius-user);
-  padding: 8px 14px; max-width: 280px; white-space: pre-wrap; word-break: break-word;
-  color: var(--ink);
+  padding: 10px 14px; max-width: min(85%, 320px); white-space: pre-wrap; word-break: break-word;
+  color: var(--ink); font-size: 15px; line-height: 1.45;
 }
 
 /* assistant markdown */
@@ -213,10 +206,10 @@ textarea { font: inherit; }
 }
 .card-body .code-fold { background: transparent; margin-top: 6px; }
 
-/* tool / thinking — Synara file-row style: compact, icon + name + meta */
+/* tool / thinking cards — used inside bottom sheet & permission previews */
 .card {
   border: 1px solid var(--border-light); border-radius: var(--radius-card);
-  overflow: hidden; margin: 0 0 10px; background: transparent;
+  overflow: hidden; margin: 0 0 10px; background: var(--panel);
 }
 .card-head {
   display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px;
@@ -238,21 +231,24 @@ textarea { font: inherit; }
 }
 .card.open .card-body { display: block; }
 
-/* collapsed work — Synara "Worked for Xs ›" disclosure + hairline */
-.work { margin-bottom: 2px; }
-.worked { }
-.worked-trig {
-  display: inline-flex; align-items: center; gap: 5px; padding: 2px 0 8px;
-  font-size: 13px; color: var(--ink-2); transition: color .2s; margin-left: -1px;
+/* Cursor-style status lines — thinking, tools, work summary */
+.work { margin-bottom: 4px; }
+.status-line {
+  display: block; width: 100%; text-align: left;
+  padding: 2px 0; margin: 0 0 2px;
+  font-size: 13px; line-height: 1.4; color: var(--ink-3);
+  background: none; border: 0; cursor: pointer;
+  transition: color .15s;
 }
-.worked-trig:hover { color: var(--ink); }
-.worked-trig .chev { font-size: 10px; color: var(--ink-3); transition: transform .2s; }
-.worked.open .worked-trig .chev { transform: rotate(90deg); }
-.worked-panel { display: none; margin-bottom: 8px; }
-.worked.open .worked-panel { display: block; }
-.hr { height: 1px; width: 100%; background: var(--border); margin: 2px 0 12px; }
-/* while running, work items show inline (no collapse) */
-.work > .card { margin-bottom: 8px; }
+.status-line:hover, .status-line:active { color: var(--ink-2); }
+.status-line.running { color: var(--ink-2); }
+.status-line.running::after {
+  content: ""; display: inline-block; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--ink-3); margin-left: 4px; vertical-align: middle;
+  animation: statusPulse 1.2s ease-in-out infinite;
+}
+@keyframes statusPulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+.work-summary { margin-bottom: 10px; }
 
 /* error card */
 .err-card {
@@ -283,10 +279,10 @@ textarea { font: inherit; }
 }
 #empty.hidden { display: none; }
 #empty .brand {
-  width: 40px; height: 40px; border-radius: 11px; background: var(--accent);
-  color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 12px; background: var(--btn-secondary);
+  color: var(--ink-2); font-size: 22px; display: flex; align-items: center; justify-content: center;
 }
-#empty h1 { font-size: 24px; font-weight: 600; margin: 0; color: var(--ink); opacity: .9; }
+#empty h1 { font-size: 22px; font-weight: 600; margin: 0; color: var(--ink); }
 #empty p { color: var(--ink-3); font-size: 15px; margin: 0; }
 #empty .suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 300px; pointer-events: auto; margin-top: 4px; }
 #empty .suggestions button {
@@ -296,40 +292,55 @@ textarea { font: inherit; }
 }
 #empty .suggestions button:hover { background: var(--btn-secondary); color: var(--ink); border-color: var(--border); }
 
-/* ---------- composer — Synara stacked panel ---------- */
-#composer { flex: 0 0 auto; position: relative; background: var(--bg); padding: 8px 10px; padding-bottom: calc(8px + var(--safe-bottom)); }
+/* ---------- composer — Cursor floating pill ---------- */
+#composer {
+  flex: 0 0 auto; position: relative; background: transparent;
+  padding: 0 12px; padding-bottom: calc(10px + var(--safe-bottom));
+}
+#composerDock {
+  background: linear-gradient(transparent, var(--bg) 30%);
+  padding-top: 8px;
+}
 #composerRow {
-  display: flex; flex-direction: column; gap: 6px; background: var(--control);
-  border: 1px solid var(--border); border-radius: 16px; padding: 8px 8px 6px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--control);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-composer);
+  padding: 12px 12px 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.35);
   transition: border-color .15s;
 }
 #composerRow:focus-within { border-color: var(--focus-border); }
 #input {
   border: 0; background: none; resize: none; outline: none; width: 100%;
-  max-height: 140px; padding: 2px 4px; line-height: 1.5; color: var(--ink);
+  max-height: 160px; padding: 0 2px; line-height: 1.45; color: var(--ink);
+  font-size: 15px;
 }
 #input::placeholder { color: var(--ink-3); }
-/* bottom control row (Local · model · effort · send) */
-#composerControls { display: flex; align-items: center; gap: 6px; padding: 0 2px; }
-.ctl {
-  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
-  border-radius: var(--radius-sm); font-size: 12px; color: var(--ink-2);
-  background: var(--btn-secondary); transition: background .15s, color .15s;
+#composerControls { display: flex; align-items: center; gap: 4px; padding: 0; }
+.dock-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; min-width: 32px; padding: 0 8px;
+  border-radius: 16px; color: var(--ink-2);
+  background: transparent; transition: background .15s, color .15s;
 }
-.ctl:hover { background: var(--btn-secondary-hover); color: var(--ink); }
-.ctl .ico { font-size: 12px; opacity: .85; }
+.dock-btn:hover { background: var(--btn-secondary-hover); color: var(--ink); }
+.dock-btn.dock-text { font-size: 14px; font-weight: 500; padding: 0 10px; }
 #composerControls .spacer { flex: 1; }
 #sendBtn {
-  flex: 0 0 30px; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--primary); color: var(--primary-fg); font-size: 15px; font-weight: 600;
-  display: flex; align-items: center; justify-content: center; transition: opacity .15s, background .15s;
+  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--primary); color: var(--primary-fg);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .15s, transform .1s;
 }
+#sendBtn:active { transform: scale(0.94); }
 #sendBtn:not(.active):not(.busy) { opacity: .35; }
-#sendBtn.busy { background: var(--danger); color: #fff; }
+#sendBtn .ico-stop { display: none; }
+#sendBtn.busy .ico-send { display: none; }
+#sendBtn.busy .ico-stop { display: block; }
+#sendBtn.busy { opacity: 1; }
 
-/* model picker — popover above the composer controls */
-#modelCtl, #localCtl { cursor: pointer; }
-.ctl:active { transform: scale(0.96); }
+#modelCtl { cursor: pointer; }
 .model-menu {
   position: absolute; left: 12px; bottom: calc(100% - 6px); z-index: 45;
   min-width: 200px; max-width: calc(100% - 24px); max-height: 50vh; overflow-y: auto;
@@ -523,3 +534,48 @@ textarea { font: inherit; }
 .row-mi:hover { background: var(--btn-secondary-hover); color: var(--ink); }
 .row-mi.danger { color: var(--danger); }
 .row-mi.danger:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+
+/* ---------- bottom sheet (thinking / tool details) ---------- */
+#sheetMask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  z-index: 50; opacity: 0; pointer-events: none; transition: opacity .25s;
+}
+#sheetMask.show { opacity: 1; pointer-events: auto; }
+#bottomSheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 51;
+  max-height: 85vh; background: var(--panel);
+  border-radius: 14px 14px 0 0;
+  transform: translateY(100%); transition: transform .32s cubic-bezier(.32,.72,0,1);
+  display: flex; flex-direction: column;
+  padding-bottom: var(--safe-bottom);
+}
+#bottomSheet.show { transform: translateY(0); }
+#sheetHandle {
+  width: 36px; height: 4px; border-radius: 2px; background: var(--border-heavy);
+  margin: 8px auto 4px; flex: 0 0 auto;
+}
+#sheetHead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px 10px; border-bottom: 1px solid var(--border-light);
+  flex: 0 0 auto;
+}
+#sheetClose {
+  width: 32px; height: 32px; border-radius: 50%; color: var(--ink-2);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+#sheetClose:hover { background: var(--btn-secondary-hover); color: var(--ink); }
+#sheetTitle { flex: 1; text-align: center; font-weight: 600; font-size: 15px; color: var(--ink); margin-right: 32px; }
+#sheetBody {
+  flex: 1 1 0; overflow-y: auto; padding: 14px 16px 20px;
+  font-size: 14px; line-height: 1.55; color: var(--ink-2);
+}
+#sheetBody .md { color: var(--ink); }
+#sheetBody .sheet-thinking {
+  white-space: pre-wrap; word-break: break-word; color: var(--ink-2); font-size: 14px;
+}
+#sheetBody .sheet-item { margin-bottom: 16px; }
+#sheetBody .sheet-item:last-child { margin-bottom: 0; }
+#sheetBody .sheet-item-label {
+  font-size: 12px; font-weight: 600; color: var(--ink-3);
+  text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px;
+}
