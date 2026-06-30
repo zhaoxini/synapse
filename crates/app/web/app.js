@@ -170,8 +170,8 @@ function startTurn() {
     order: [],            // ordered work items: {kind:'thinking'|'tool', ...}
     thinking: "",
     text: "",
-    ticks: 0,             // elapsed proxy: counts seconds via pulse timer
-    started: true,
+    ticks: 0,             // live elapsed: counts seconds via pulse timer
+    firstTs: 0, lastTs: 0,// frame timestamps (ms) — elapsed source for history
     appended: false,
   };
   // don't add to DOM until there's content (avoid empty box)
@@ -189,13 +189,21 @@ function ingestAssistant(evt) {
     ? msg.content
     : (typeof msg.content === "string" ? [{ type: "text", text: msg.content }] : []);
 
-  // Genuine auth/quota error frame: explicit error marker + a single text block.
-  const isError = (evt.error || msg.error) && content.length && content[0].text;
-  if (isError) { pushError(str(content[0].text)); return; }
+  // Genuine auth/quota/API error frame: explicit error marker.
+  const isError = evt.error || msg.error || evt.isApiErrorMessage;
+  if (isError) {
+    const et = (content[0] && content[0].text) || str(evt.error) || str(msg.error) || "Request failed";
+    pushError(str(et));
+    return;
+  }
 
   // No active turn (e.g. history backfill) → start one implicitly.
   if (!state.turn) startTurn();
   const tn = state.turn;
+  // Track frame timestamps so history (which has no live timer) can still show
+  // a real "Worked for Xs".
+  const ts = evt.timestamp ? Date.parse(evt.timestamp) : 0;
+  if (ts) { if (!tn.firstTs) tn.firstTs = ts; tn.lastTs = ts; }
 
   for (const blk of content) {
     if (blk.type === "text" && typeof blk.text === "string") {
@@ -233,7 +241,10 @@ function renderTurn(settled) {
       // collapsed: one "Worked for Xs ›" row + hairline; expand to reveal items
       const wrap = document.createElement("div"); wrap.className = "worked";
       const trig = document.createElement("button"); trig.className = "worked-trig";
-      const label = tn.ticks > 0 ? `Worked for ${fmtElapsed(tn.ticks)}` : "Details";
+      // elapsed: live timer (ticks) if present, else frame-timestamp span (history)
+      const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
+      const secs = tn.ticks > 0 ? tn.ticks : tsSecs;
+      const label = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
       trig.innerHTML = `<span>${label}</span><span class="chev">▸</span>`;
       const panel = document.createElement("div"); panel.className = "worked-panel";
       buildWorkItems(panel, tn);
@@ -311,15 +322,28 @@ function finalizeStream() {
 function ingestHistory(events) {
   clearMessages();
   state.turn = null;
+  let pendingUserTs = 0;  // timestamp of the user msg that opened the next turn
   for (const evt of events) {
     if (evt.type === "user" && evt.message) {
-      finalizeStream();                 // close the previous assistant turn
       const txt = contentText(evt.message.content);
-      // Skip tool_result-only user frames (they're work, not real user turns).
-      if (txt) echoUser(txt, evt.message.id);
-      else ingestResultFromUser(evt);
+      if (txt) {
+        // A real user message is a turn boundary: close the previous turn first.
+        finalizeStream();
+        echoUser(txt, evt.message.id);
+        pendingUserTs = evt.timestamp ? Date.parse(evt.timestamp) : 0;
+      } else {
+        // tool_result-only user frame: part of the current turn's work, NOT a
+        // boundary — route it to the active turn's tools without finalizing.
+        ingestResultFromUser(evt);
+      }
     } else if (evt.type === "assistant" && evt.message) {
+      const hadTurn = !!state.turn;
       ingestAssistant(evt);
+      // seed the new turn's start from the user message that triggered it, so
+      // "Worked for Xs" includes the model's initial latency.
+      if (!hadTurn && state.turn && pendingUserTs) {
+        state.turn.firstTs = pendingUserTs; pendingUserTs = 0;
+      }
     } else if (evt.type === "stderr") {
       pushStderr(str(evt.text));
     }
