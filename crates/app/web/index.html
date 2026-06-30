@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- mobile: fit viewport, no zoom, uses available height. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Synapse</title>
+  <link rel="stylesheet" href="vendor/github-dark.min.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <!-- Top bar -->
+  <header id="topbar">
+    <button id="drawerBtn" class="iconbtn" aria-label="Sessions">☰</button>
+    <div id="title">
+      <div id="titleName">Synapse</div>
+      <div id="titleSub"><span id="dot"></span><span id="subText">no session</span></div>
+    </div>
+    <button id="newBtn" class="iconbtn" aria-label="New session">＋</button>
+  </header>
+
+  <!-- Reconnect banner -->
+  <div id="reconnect">Reconnecting…</div>
+
+  <!-- Toast -->
+  <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
+
+  <!-- Message list -->
+  <main id="scroller">
+    <div id="messages"></div>
+  </main>
+
+  <!-- "new messages" pill -->
+  <button id="newPill">↓ New</button>
+
+  <!-- Empty state -->
+  <div id="empty">
+    <div class="brand">✦</div>
+    <h1>How can I help with your code?</h1>
+    <p>Send a prompt to start driving Claude Code.</p>
+    <div class="suggestions">
+      <button data-prompt="Summarize the recent changes in this repo.">📝  Summarize recent changes</button>
+      <button data-prompt="Explain what this project does.">💡  Explain this project</button>
+      <button data-prompt="Find and fix any failing tests.">🧪  Fix failing tests</button>
+    </div>
+  </div>
+
+  <!-- Composer -->
+  <footer id="composer">
+    <div id="composerRow">
+      <textarea id="input" rows="1" placeholder="Send a message"></textarea>
+      <button id="sendBtn" aria-label="Send">↑</button>
+    </div>
+  </footer>
+
+  <!-- Drawer overlay -->
+  <div id="drawerMask"></div>
+  <aside id="drawer">
+    <div id="drawerHead">
+      <span class="brandname">Synapse</span>
+      <button id="refreshBtn" class="iconbtn" aria-label="Refresh">↻</button>
+      <button id="drawerClose" class="iconbtn" aria-label="Close">✕</button>
+    </div>
+    <button id="newSessionBtn">+  New session</button>
+    <input id="search" type="text" placeholder="Search sessions" />
+    <div id="sessionList"></div>
+  </aside>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

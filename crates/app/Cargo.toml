@@ -13,6 +13,13 @@ path = "src/lib.rs"
 name = "synapse-app"
 path = "src/main.rs"
 
+# Offline host for the embedded web chat bundle. Serves the chat web app over
+# localhost so any browser / webview (desktop browser, iOS WKWebView) can load
+# it without a network dependency. The web app then dials the Synapse server WS.
+[[bin]]
+name = "synapse-web"
+path = "src/bin/web.rs"
+
 [features]
 # On Android, enable the android-activity backend instead of the
 # desktop winit backend. Pass `--features android` from build-android.sh.
