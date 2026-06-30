@@ -209,6 +209,22 @@ textarea { font: inherit; }
 }
 .card.open .card-body { display: block; }
 
+/* collapsed work — Synara "Worked for Xs ›" disclosure + hairline */
+.work { margin-bottom: 2px; }
+.worked { }
+.worked-trig {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 0 8px;
+  font-size: 13px; color: var(--ink-2); transition: color .2s; margin-left: -1px;
+}
+.worked-trig:hover { color: var(--ink); }
+.worked-trig .chev { font-size: 10px; color: var(--ink-3); transition: transform .2s; }
+.worked.open .worked-trig .chev { transform: rotate(90deg); }
+.worked-panel { display: none; margin-bottom: 8px; }
+.worked.open .worked-panel { display: block; }
+.hr { height: 1px; width: 100%; background: var(--border); margin: 2px 0 12px; }
+/* while running, work items show inline (no collapse) */
+.work > .card { margin-bottom: 8px; }
+
 /* error card */
 .err-card {
   border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);

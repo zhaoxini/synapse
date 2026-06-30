@@ -26,11 +26,13 @@ const state = {
   busy: false,
   activeId: "",
   sessions: [],
-  // rendered messages: blocks keyed by stable identity
-  // each: {el, kind, role, mid, text, toolName, toolStatus, expanded, codeLang}
-  blocks: [],
-  // accumulate assistant stream by message.id
-  streamBuf: new Map(), // mid -> {text, tools:Map, thinking:[]}
+  blocks: [],         // rendered message elements (for empty/clear bookkeeping)
+  // The current assistant turn. Synara model: a turn's thinking + tool calls are
+  // "work"; while running they show live, and once the turn settles they collapse
+  // into a single "Worked for Xs ›" disclosure above the final reply text.
+  //   { el, workWrap, workBody, replyWrap, items:[], tools:Map, text, startMs }
+  turn: null,
+  msNow: 0,           // monotonic-ish clock fed from frames (no Date in workflow ctx, fine here)
 };
 
 // ---- credential injection from native (pairing) ----
@@ -124,29 +126,25 @@ function handle(v) {
 
 function handleEvent(evt) {
   const t = evt.type;
+  if (typeof evt.ttft_ms === "number") state.msNow += 0; // (kept simple; elapsed uses counters below)
   if (t === "system") {
     const sub = evt.subtype;
     if (sub === "session_created") { upsertSession(evt.session); }
-    else if (sub === "turn_started") { setBusy(true); }
+    else if (sub === "turn_started") { startTurn(); setBusy(true); }
     else if (sub === "turn_stopped") { setBusy(false); finalizeStream(); }
-    else if (sub === "bridge_error") { pushError(str(evt.error) || "Turn failed"); setBusy(false); }
+    else if (sub === "bridge_error") { pushError(str(evt.error) || "Turn failed"); setBusy(false); finalizeStream(); }
     else if (sub === "fallback_to_json") { /* no-op */ }
     return;
   }
   if (t === "assistant") { ingestAssistant(evt); return; }
   if (t === "user") {
-    // echoed user turn (and live local echo handled on send)
     if (evt.message) {
       const txt = contentText(evt.message.content);
       if (txt) echoUser(txt, evt.message.id);
     }
     return;
   }
-  if (t === "result") {
-    // tool results / final result: attach to last tool card if present
-    ingestResult(evt);
-    return;
-  }
+  if (t === "result") { ingestResult(evt); return; }
   if (t === "stderr") {
     const txt = str(evt.text);
     if (txt) pushStderr(txt);
@@ -154,7 +152,36 @@ function handleEvent(evt) {
   }
 }
 
-// =================== assistant stream assembly ===================
+// =================== turn model ===================
+// A turn owns two regions inside one assistant message element:
+//   .work  — thinking + tool calls (live while running, collapsed when settled)
+//   .reply — the final markdown answer
+function startTurn() {
+  // close any previous turn first (defensive; turn_stopped normally does this)
+  if (state.turn) finalizeStream();
+  const el = mkMsg("assistant");
+  const body = el.querySelector(".body");
+  const workWrap = document.createElement("div"); workWrap.className = "work";
+  const replyWrap = document.createElement("div"); replyWrap.className = "reply";
+  body.appendChild(workWrap); body.appendChild(replyWrap);
+  state.turn = {
+    el, workWrap, replyWrap,
+    tools: new Map(),     // tool_use_id -> {id,name,input,status,output}
+    order: [],            // ordered work items: {kind:'thinking'|'tool', ...}
+    thinking: "",
+    text: "",
+    ticks: 0,             // elapsed proxy: counts seconds via pulse timer
+    started: true,
+    appended: false,
+  };
+  // don't add to DOM until there's content (avoid empty box)
+}
+
+function ensureTurnInDom() {
+  const tn = state.turn;
+  if (tn && !tn.appended) { addBlock(tn.el); tn.appended = true; }
+}
+
 function ingestAssistant(evt) {
   const msg = evt.message;
   if (!msg) return;
@@ -162,118 +189,154 @@ function ingestAssistant(evt) {
     ? msg.content
     : (typeof msg.content === "string" ? [{ type: "text", text: msg.content }] : []);
 
-  // A genuine auth/quota error frame is a synthetic assistant turn: it carries
-  // an explicit error marker and a single text block, with no real message id.
-  // (History transcript frames also lack message.id but are normal replies, so
-  // "no id" alone must NOT mean error — that was the bug that turned backfilled
-  // assistant messages into red error cards.)
+  // Genuine auth/quota error frame: explicit error marker + a single text block.
   const isError = (evt.error || msg.error) && content.length && content[0].text;
-  if (isError) {
-    pushError(str(content[0].text));
-    return;
-  }
+  if (isError) { pushError(str(content[0].text)); return; }
 
-  // Accumulate blocks into a per-message buffer (keyed by message.id, else the
-  // frame uuid for history transcripts, else a synthetic id).
-  const mid = str(msg.id) || str(evt.uuid) || ("m" + state.blocks.length);
-  let buf = state.streamBuf.get(mid);
-  if (!buf) {
-    buf = { text: "", thinking: "", tools: new Map(), el: null };
-    state.streamBuf.set(mid, buf);
-  }
+  // No active turn (e.g. history backfill) → start one implicitly.
+  if (!state.turn) startTurn();
+  const tn = state.turn;
 
   for (const blk of content) {
     if (blk.type === "text" && typeof blk.text === "string") {
-      buf.text += blk.text;
-    } else if (blk.type === "thinking" && typeof blk.thinking === "string") {
-      buf.thinking += blk.thinking;
+      tn.text += blk.text;
+    } else if (blk.type === "thinking" && typeof blk.thinking === "string" && blk.thinking) {
+      tn.thinking += blk.thinking;
     } else if (blk.type === "tool_use") {
-      buf.tools.set(blk.id, {
+      const tool = {
         id: blk.id, name: blk.name,
         input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
-        status: "running",
-      });
+        status: "running", output: "",
+      };
+      tn.tools.set(blk.id, tool);
+      tn.order.push({ kind: "tool", id: blk.id });
     }
   }
 
-  // Only open a message shell once there is something to render. A frame that
-  // carries only a thinking *signature* (no text/tool/visible thinking) must
-  // NOT create an empty box — that was the blank-card bug.
-  const hasContent = buf.text || buf.thinking || buf.tools.size > 0;
-  if (hasContent && !buf.el) {
-    buf.el = mkMsg("assistant");
-    addBlock(buf.el);
-  }
-  if (buf.el) renderStream(mid);
+  const hasContent = tn.text || tn.thinking || tn.tools.size > 0;
+  if (hasContent) { ensureTurnInDom(); renderTurn(false); }
   updatePulse();
   ensurePinned();
 }
 
-function renderStream(mid) {
-  const buf = state.streamBuf.get(mid);
-  if (!buf || !buf.el) return;
-  const body = buf.el.querySelector(".body");
-  body.innerHTML = "";
+// Render the active turn. `settled` collapses the work region into a
+// "Worked for Xs ›" disclosure (Synara style); while running it shows live.
+function renderTurn(settled) {
+  const tn = state.turn;
+  if (!tn) return;
+  const hasWork = tn.thinking || tn.tools.size > 0;
 
-  if (buf.thinking) body.appendChild(cardEl("thinking", "💭", "Thinking", null, buf.thinking));
-  if (buf.text) body.appendChild(mdEl(buf.text));
-  for (const t of buf.tools.values()) {
-    const sub = t.name === "Bash" ? firstLine(t.input) : "";
-    body.appendChild(cardEl("tool", "✦", t.name, sub, t.input, t.status));
+  // ----- work region -----
+  tn.workWrap.innerHTML = "";
+  if (hasWork) {
+    if (settled) {
+      // collapsed: one "Worked for Xs ›" row + hairline; expand to reveal items
+      const wrap = document.createElement("div"); wrap.className = "worked";
+      const trig = document.createElement("button"); trig.className = "worked-trig";
+      const label = tn.ticks > 0 ? `Worked for ${fmtElapsed(tn.ticks)}` : "Details";
+      trig.innerHTML = `<span>${label}</span><span class="chev">▸</span>`;
+      const panel = document.createElement("div"); panel.className = "worked-panel";
+      buildWorkItems(panel, tn);
+      trig.addEventListener("click", () => {
+        wrap.classList.toggle("open");
+      });
+      wrap.appendChild(trig); wrap.appendChild(panel);
+      tn.workWrap.appendChild(wrap);
+      const hr = document.createElement("div"); hr.className = "hr";
+      tn.workWrap.appendChild(hr);
+    } else {
+      // live: show work items inline (thinking card + running tool cards)
+      buildWorkItems(tn.workWrap, tn);
+    }
+  }
+
+  // ----- reply region -----
+  tn.replyWrap.innerHTML = "";
+  if (tn.text) tn.replyWrap.appendChild(mdEl(tn.text));
+}
+
+function buildWorkItems(container, tn) {
+  if (tn.thinking) {
+    container.appendChild(cardEl("thinking", "✦", "Thinking", null, tn.thinking));
+  }
+  for (const it of tn.order) {
+    if (it.kind === "tool") {
+      const t = tn.tools.get(it.id);
+      if (!t) continue;
+      const sub = t.name === "Bash" ? firstLine(t.input) : "";
+      const bodyText = t.output ? `${t.input}\n\n${t.output}` : t.input;
+      container.appendChild(cardEl("tool", "✦", t.name, sub, bodyText, t.status));
+    }
   }
 }
 
 function ingestResult(evt) {
-  // a result frame can carry tool_result items in content; attach status to tools
   const content = evt.message && Array.isArray(evt.message.content) ? evt.message.content : [];
+  const tn = state.turn;
+  if (!tn) return;
   for (const c of content) {
-    if (c.type === "tool_result" && c.tool_use_id) {
-      // find the owning stream's tool
-      for (const buf of state.streamBuf.values()) {
-        if (buf.tools && buf.tools.has(c.tool_use_id)) {
-          const t = buf.tools.get(c.tool_use_id);
-          t.status = c.is_error ? "error" : "done";
-          t.output = typeof c.content === "string" ? c.content
-                   : Array.isArray(c.content) ? c.content.map(x => x.text || "").join("\n") : "";
-          // re-render that stream
-          for (const [mid, b] of state.streamBuf) { if (b === buf) renderStream(mid); }
-        }
-      }
+    if (c.type === "tool_result" && c.tool_use_id && tn.tools.has(c.tool_use_id)) {
+      const t = tn.tools.get(c.tool_use_id);
+      t.status = c.is_error ? "error" : "done";
+      t.output = typeof c.content === "string" ? c.content
+               : Array.isArray(c.content) ? c.content.map(x => x.text || "").join("\n") : "";
     }
   }
+  renderTurn(false);
   updatePulse();
   ensurePinned();
 }
 
 function finalizeStream() {
-  // commit each finished stream's tools to error if still running (turn ended)
-  for (const buf of state.streamBuf.values()) {
-    if (buf.tools) for (const t of buf.tools.values()) if (t.status === "running") t.status = "done";
+  const tn = state.turn;
+  if (tn) {
+    // any tool still "running" at turn end is treated as done
+    for (const t of tn.tools.values()) if (t.status === "running") t.status = "done";
+    const hasWork = tn.thinking || tn.tools.size > 0;
+    const hasAnything = hasWork || tn.text;
+    if (hasAnything) {
+      ensureTurnInDom();
+      renderTurn(true);   // collapse work into "Worked for Xs ›"
+    } else if (tn.appended) {
+      tn.el.remove();     // empty turn — drop it
+    }
+    state.turn = null;
   }
-  for (const mid of state.streamBuf.keys()) renderStream(mid);
-  // Clear the assembly scratch: the rendered DOM stays on the page, but the
-  // next turn must start with an empty buffer so the typing indicator shows
-  // and a new message.id gets its own fresh shell.
-  state.streamBuf.clear();
+  updatePulse();
 }
 
 // =================== history backfill ===================
+// Transcript has no turn_started/stopped markers; a user message starts a new
+// turn, and everything until the next user message is that turn's work + reply.
 function ingestHistory(events) {
-  // rebuild blocks from transcript events
   clearMessages();
-  state.streamBuf.clear();
+  state.turn = null;
   for (const evt of events) {
     if (evt.type === "user" && evt.message) {
+      finalizeStream();                 // close the previous assistant turn
       const txt = contentText(evt.message.content);
+      // Skip tool_result-only user frames (they're work, not real user turns).
       if (txt) echoUser(txt, evt.message.id);
+      else ingestResultFromUser(evt);
     } else if (evt.type === "assistant" && evt.message) {
-      // treat as a finalized stream
       ingestAssistant(evt);
     } else if (evt.type === "stderr") {
       pushStderr(str(evt.text));
     }
   }
   finalizeStream();
+}
+
+// In transcripts, tool_result blocks arrive inside a *user* frame; route them
+// to the active turn's tools so the collapsed work shows outputs.
+function ingestResultFromUser(evt) {
+  ingestResult({ message: evt.message });
+}
+
+function fmtElapsed(secs) {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
 }
 
 // =================== rendering primitives ===================
@@ -440,26 +503,29 @@ function setBusy(b) {
   updatePulse();
 }
 // The typing indicator shows whenever the turn is busy and no assistant TEXT is
-// currently streaming — i.e. before the first token, while thinking, and while
-// a tool runs. It lives at the end of the list (after any tool cards).
+// streaming yet — before the first token, while thinking, and while a tool runs.
+// It sits at the end of the list (after any live work items).
 let pulseEl = null;
-function streamingText() {
-  for (const b of state.streamBuf.values()) if (b.text) return true;
-  return false;
-}
+let tickTimer = null;
 function updatePulse() {
-  const show = state.busy && !streamingText();
+  const show = state.busy && !(state.turn && state.turn.text);
   if (show) {
     if (!pulseEl) {
       pulseEl = document.createElement("div");
       pulseEl.className = "msg assistant pulse-row";
       pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
     }
-    messagesEl.appendChild(pulseEl); // move to end (after tool cards)
+    messagesEl.appendChild(pulseEl); // move to end (after work items)
     emptyEl.classList.add("hidden");
     ensurePinned();
   } else if (pulseEl) {
     pulseEl.remove(); pulseEl = null;
+  }
+  // elapsed counter: tick once a second while busy, feeding "Worked for Xs"
+  if (state.busy && !tickTimer) {
+    tickTimer = setInterval(() => { if (state.turn) state.turn.ticks++; }, 1000);
+  } else if (!state.busy && tickTimer) {
+    clearInterval(tickTimer); tickTimer = null;
   }
 }
 
@@ -508,7 +574,7 @@ function select(id) {
     const es = $("emptySub"); if (es) es.textContent = dir || "";
   }
   clearMessages();
-  state.streamBuf.clear();
+  state.turn = null;
   send({ op: "history", sessionId: id, limit: 400 });
   closeDrawer();
 }
