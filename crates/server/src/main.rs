@@ -9,11 +9,12 @@ mod tail;
 mod tls;
 mod tunnel;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use manager::SessionManager;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use tokio::net::TcpListener;
 
 /// Synapse server — remote mobile control for the Claude Code CLI.
 #[derive(Parser, Debug)]
@@ -275,15 +276,11 @@ async fn run_server(args: RunArgs) -> Result<()> {
         }
     }
 
-    if let Some(cfg) = &saved {
-        let _ = cfg; // relay uplink below uses saved config
-    }
-
-    let relay_url = args
+    let relay_bridge = if let Some(relay_url) = args
         .relay
         .clone()
-        .or_else(|| saved.as_ref().map(|c| c.uplink_url()));
-    if let Some(relay_url) = relay_url {
+        .or_else(|| saved.as_ref().map(|c| c.uplink_url()))
+    {
         let (device_id, relay_token) = if let Some(cfg) = &saved {
             if args.relay_device_id.is_none() && args.relay.is_none() {
                 (cfg.device_id.clone(), cfg.device_token.clone())
@@ -303,11 +300,6 @@ async fn run_server(args: RunArgs) -> Result<()> {
                 args.relay_token.clone().unwrap_or_else(|| token.clone()),
             )
         };
-        let local_ws = format!(
-            "{}://127.0.0.1:{}/?token={token}",
-            if args.tls { "wss" } else { "ws" },
-            args.port
-        );
         if saved.is_none() {
             let connect_host = relay_url
                 .replace("wss://", "")
@@ -319,17 +311,11 @@ async fn run_server(args: RunArgs) -> Result<()> {
             );
             println!("  Relay uplink:   {relay_url} (deviceId={device_id})");
             println!("  Relay pair URL: {app_connect}\n");
-        } else {
-            tracing::info!(%relay_url, %device_id, "relay uplink starting");
         }
-        let relay_url = relay_url.clone();
-        let device_id = device_id.clone();
-        let relay_token = relay_token.clone();
-        let local_ws = local_ws.clone();
-        tokio::spawn(async move {
-            relay::run_bridge(&relay_url, &device_id, &relay_token, &local_ws).await;
-        });
-    }
+        Some((relay_url, device_id, relay_token))
+    } else {
+        None
+    };
 
     tail::spawn(manager.clone());
 
@@ -339,6 +325,13 @@ async fn run_server(args: RunArgs) -> Result<()> {
             _ => {}
         }
     });
+
+    // Account + relay mode only needs localhost; avoids clashing with other LAN services.
+    let bind_host = if saved.is_some() && args.host == "0.0.0.0" {
+        "127.0.0.1".to_string()
+    } else {
+        args.host.clone()
+    };
 
     if args.tls {
         let rustls_config = if args.tls_self_signed {
@@ -369,14 +362,83 @@ async fn run_server(args: RunArgs) -> Result<()> {
                 .context("--tls requires --tls-key (or use --tls-self-signed)")?;
             tls::config_from_files(cert, key).await?
         };
-        axum_server::bind_rustls(addr, rustls_config)
+        let bound = bind_addr_rustls(&bind_host, args.port).await?;
+        spawn_relay_bridge(relay_bridge, bound.port(), args.tls, &token);
+        axum_server::bind_rustls(bound, rustls_config)
             .serve(router.into_make_service())
             .await?;
     } else {
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let (listener, bound) = bind_listener(&bind_host, args.port).await?;
+        spawn_relay_bridge(relay_bridge, bound.port(), false, &token);
         axum::serve(listener, router.into_make_service()).await?;
     }
     Ok(())
+}
+
+fn spawn_relay_bridge(
+    relay_bridge: Option<(String, String, String)>,
+    port: u16,
+    tls: bool,
+    token: &str,
+) {
+    let Some((relay_url, device_id, relay_token)) = relay_bridge else {
+        return;
+    };
+    let local_ws = format!(
+        "{}://127.0.0.1:{port}/?token={token}",
+        if tls { "wss" } else { "ws" },
+    );
+    tracing::info!(%relay_url, %device_id, "relay uplink starting");
+    tokio::spawn(async move {
+        relay::run_bridge(&relay_url, &device_id, &relay_token, &local_ws).await;
+    });
+}
+
+async fn bind_listener(host: &str, port: u16) -> Result<(TcpListener, SocketAddr)> {
+    for offset in 0..16u16 {
+        let p = port.saturating_add(offset);
+        let addr: SocketAddr = format!("{host}:{p}")
+            .parse()
+            .context("invalid bind address")?;
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                if offset > 0 {
+                    println!("  Note: port {port} in use — listening on {p} instead.");
+                }
+                let bound = listener.local_addr()?;
+                return Ok((listener, bound));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!(
+        "ports {port}–{} are in use — stop the other synapse-server (`lsof -i :{port}`) or pass --port",
+        port.saturating_add(15)
+    );
+}
+
+async fn bind_addr_rustls(host: &str, port: u16) -> Result<SocketAddr> {
+    for offset in 0..16u16 {
+        let p = port.saturating_add(offset);
+        let addr: SocketAddr = format!("{host}:{p}")
+            .parse()
+            .context("invalid bind address")?;
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                if offset > 0 {
+                    println!("  Note: port {port} in use — listening on {p} instead.");
+                }
+                return Ok(listener.local_addr()?);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!(
+        "ports {port}–{} are in use — stop the other synapse-server or pass --port",
+        port.saturating_add(15)
+    );
 }
 
 fn detect_lan_ip() -> String {
