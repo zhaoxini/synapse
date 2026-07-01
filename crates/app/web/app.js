@@ -1922,7 +1922,7 @@ function updateChrome() {
     inputEl.placeholder = "Plan, ask, build…";
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
-    chatTitle.textContent = s ? cleanTitle(s.name) : "Chat";
+    chatTitle.textContent = s ? cleanTitle(s.name) : "New session";
     chatTitle.hidden = false;
     inputEl.placeholder = "Follow up…";
   }
@@ -1970,7 +1970,7 @@ function renderSessions() {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
     hint.innerHTML = `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
-    hint.querySelector(".empty-cta").addEventListener("click", newSession);
+    hint.querySelector(".empty-cta").addEventListener("click", startNewDraft);
     list.appendChild(hint);
     return;
   }
@@ -2097,6 +2097,7 @@ function doSend() {
   }
   if (!state.activeId) {
     state.pendingSend = text;
+    if (state.view !== "chat") showChat(false);
     newSession();
     return;
   }
@@ -2124,7 +2125,7 @@ window.addEventListener("popstate", () => {
   }
 });
 $("workspaceAvatar").addEventListener("click", () => { haptic("light"); showWorkspaces(); });
-$("newBtn").addEventListener("click", () => { haptic("light"); newSession(); });
+$("newBtn").addEventListener("click", () => { haptic("light"); startNewDraft(); });
 $("searchBtn").addEventListener("click", () => {
   haptic("light");
   state.searchOpen = !state.searchOpen;
@@ -2154,6 +2155,25 @@ $("archivedToggle").addEventListener("click", () => {
   renderSessions();
 });
 
+function startNewDraft() {
+  if (state.creating) return;
+  state.activeId = "";
+  state.pendingSend = null;
+  if (state.activeCwd && !state.pendingCwd) state.pendingCwd = state.activeCwd;
+  clearMessages();
+  state.turn = null;
+  setBusy(false);
+  syncModelLabel();
+  syncLocalLabel();
+  const es = $("emptySub");
+  if (es) {
+    const cwd = state.pendingCwd || state.activeCwd || workspacePaths()[0];
+    es.textContent = cwd ? basename(cwd) : "";
+  }
+  showChat();
+  haptic("light");
+}
+
 function newSession() {
   if (state.creating) return;
   const opts = {};
@@ -2162,8 +2182,7 @@ function newSession() {
   if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   state.creating = true;
-  if (state.view === "workspaces") showSessions();
-  else if (state.view === "sessions") renderSessions();
+  if (state.view === "sessions") renderSessions();
   send({ op: "create", opts });
 }
 
@@ -2248,9 +2267,9 @@ function chooseModel(id) {
 }
 function chooseCwd(path) {
   closeMenus();
-  state.pendingCwd = path;               // newSession() reads this
+  state.pendingCwd = path;
   syncLocalLabel();
-  newSession();                          // selecting a repo starts a session there
+  startNewDraft();
 }
 $("modelCtl").addEventListener("click", (e) => {
   e.stopPropagation();
