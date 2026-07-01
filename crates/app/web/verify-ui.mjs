@@ -115,6 +115,8 @@ async function main() {
       ? ok("+ opens draft chat") : fail("+ should open draft chat, not create session");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added until first message") : fail("+ prematurely created a session");
+    (await page.locator("#empty .brand img[src='logo.svg']").count()) > 0
+      ? ok("Synapse logo on empty state") : fail("Logo missing on empty state");
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
     await page.locator("#backBtn").click();
