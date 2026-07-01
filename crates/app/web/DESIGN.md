@@ -6,6 +6,33 @@ This document is the source of truth for tokens, component structure, and layout
 
 ---
 
+## Domain model (projects & sessions)
+
+```
+Server                              Client (projection)
+──────                              ─────────────────
+~/.claude.json git projects  ──┐
+~/.synapse/projects.json     ──┼──► hello.cwds[]  ──► projectPaths()
+                               │
+SessionSummary.cwd (immutable) ─┼──► state.sessions[] ──► filteredSessions(project)
+                               │
+create { opts.cwd }  ◄─────────┘    pendingCwd / draft (pre-create only)
+register_project { path } ──► persists path, returns updated cwds
+```
+
+**Mental model:** A **Project** is an absolute path to a folder (usually a git repo). A **Session** belongs to exactly one project (`session.cwd`, set at create). The home screen is a **project tree**: each project expands to show its sessions. There is no aggregate “All Repos” duplicate list.
+
+| Term (UI) | Protocol / code | Meaning |
+|-----------|-----------------|---------|
+| Project | `cwds[]`, `opts.cwd`, `session.cwd` | Absolute path to working directory |
+| Projects (screen) | `state.view === "workspaces"` | List + tree mode (CSS class unchanged) |
+| Add project (`+`) | `op: register_project` | Register folder on server + pick for next session |
+| New session | `op: create` | New Claude session in `pendingCwd` project |
+
+**Server persistence:** manually added projects are stored in `~/.synapse/projects.json` and merged with Claude-discovered git repos on every `hello` / `refresh_cwds`.
+
+---
+
 ## References (look, don't necessarily import)
 
 | Source | Use for |
@@ -25,7 +52,7 @@ We **do not** ship a full UI framework. Borrow measurements and structure; keep 
 2. **44pt touch, 32pt glyph** — interactive controls are 44×44px hit areas; visible circles/tiles are 32×32px.
 3. **Semantic tokens only** — use `--ink`, `--accent`, `--btn-secondary`, not raw hex in new CSS.
 4. **Explicit flex structure** — never stack unrelated controls as direct column children without a row wrapper (see Composer).
-5. **Chat-only composer** — `#composer` lives inside `#chatView`; workspace tree has no input bar.
+5. **Chat-only composer** — `#composer` lives inside `#chatView`; project list has no input bar.
 6. **Light theme first** — `html.theme-light` + `color-scheme: light`; dark is out of scope until tokens are duplicated.
 
 ---
@@ -113,7 +140,7 @@ Font stack: `--font-ui` (SF Pro / system). Monospace: `--font-mono` for code onl
 | `mode-workspaces` | `#topbar` (avatar + search + add), `#pageHead`, `#workspaceView` | `#chatView` |
 | `mode-chat` | `#topbar` (back + title), `#chatView` + `#composer` | `#pageHead`, `#workspaceView` |
 
-State in JS: `state.view` is `"workspaces"` | `"chat"`.
+State in JS: `state.view` is `"workspaces"` | `"chat"` (internal name; user-facing label is **Projects**).
 
 ---
 
@@ -121,74 +148,42 @@ State in JS: `state.view` is `"workspaces"` | `"chat"`.
 
 ### Top bar (`#topbar`)
 
-**Workspace mode**
+**Projects list mode**
 
 ```
-[ avatar 32px ]                    [ search ] [ + add repo ]
-     ↑ 44pt hit                         ↑ .topbar-actions gap 2px
+[ avatar 32px ]                    [ search ] [ + add project ]
 ```
 
-- Horizontal padding: **16px**; optical alignment via `margin-left/right: -6px` on bar sides.
-- `.iconbtn`: 44×44 hit; `.iconbtn-filled::before` draws **32×32** circle behind icon.
-- `#newBtn` opens add-repo menu (`#localMenu`); must `stopPropagation` on click (document closes menus).
-- `#searchBtn` toggles `#searchWrap`; active state = `.iconbtn.active`.
+- `#newBtn` → `openAddProject()` → `register_project` on server (not a local-only list mutation).
 
-**Chat mode**
-
-- Show `#backBtn` only; center `#chatTitle`; hide avatar and `.topbar-actions`.
-
-**Konsta reference:** `Navbar`, header actions.
-
----
-
-### Search (`#searchWrap`)
-
-Collapsed by default (`.hidden`). When open:
-
-```html
-<div class="search-field">
-  <svg class="search-field-icon" />
-  <input id="searchInput" />
-</div>
-```
-
-- Wrapper padding: `0 16px 10px`
-- Field: height **36px**, radius **18px**, background `--btn-secondary`
-- Icon 16px, gap 6px
-
-**Konsta reference:** `Searchbar` (iOS pill).
+**Chat mode** — show `#backBtn` only; center `#chatTitle`; hide avatar and `.topbar-actions`.
 
 ---
 
 ### Page title (`#pageHead`)
 
-- Only in workspace mode.
+- Title: **Projects** (`#pageTitle`)
 - `padding: 2px 16px 12px`
-- `#pageTitle`: 34px bold, letter-spacing `-0.02em`
 
 ---
 
-### Workspace tree (`#workspaceView`)
+### Project tree (`#workspaceView`)
 
-Single-layer tree: repos expand inline; sessions nested underneath.
+One row per project path; sessions nested when expanded. **No “All Repos” aggregate.**
 
-**Repo row** — `.ws-row.ws-tree-repo`
+**Project row** — `.ws-row.ws-tree-repo`
 
-- Padding `13px 16px`, gap 12px
-- Chevron `.ws-chev` rotates 90° when `.expanded`
-- Click toggles expand (does not navigate)
+- Label: `basename(projectPath)`; optional `.ws-count` badge
+- Click toggles `state.expandedProjects` (does not navigate away)
+- Sorted by most recent session activity, then name
+- On return from chat, only the active session’s project is auto-expanded (plus any with sessions on first load)
 
 **Children** — `.ws-tree-children`
 
-- `.tree-new-row` — `+ New session`, indent **48px** left, accent color
-- `.sess-row` — session rows, same indent
-- Empty: `.empty-hint` text only
+- `.tree-new-row` → `startNewDraft(projectPath)`
+- `.sess-row` → open chat
 
-**Session row** — `.sess-row`
-
-- Icon: `.sess-icon.spark` (busy) or `.sess-icon.dot` (idle)
-- Title 17px; subtitle `.sess-sub` 15px
-- `.sess-archive-btn` — 34px circle, right side
+**Empty catalog:** “No projects yet — Tap + to add a project folder”
 
 **Konsta reference:** `List`, `ListItem`, chevron disclosure.
 
@@ -257,7 +252,7 @@ Used for thinking content, tool details, model picker (`.sheet-picker`).
 Popover anchored to composer or opened from `+` (add repo).
 
 - `#attachMenu` — child of `#composer` (positioned above composer)
-- `#localMenu` — body level (add repo from workspace); call `stopPropagation` on trigger
+- `#localMenu` — body level (add project from projects list); call `stopPropagation` on trigger
 
 ---
 
@@ -298,8 +293,9 @@ Before shipping UI changes:
 1. Run `./scripts/verify-web.sh` from repo root.
 2. Rebuild iOS sim: `./mobile/build-sim.sh` (web bundle is compiled into the binary).
 3. Manual checks:
-   - [ ] Workspace: no composer visible
-   - [ ] `+` opens add-repo menu, does not create session
+   - [ ] Projects list: no composer visible
+   - [ ] `+` registers project via server; does not create session by itself
+   - [ ] No duplicate session rows under “All Repos”
    - [ ] Tree expand/collapse; session opens chat
    - [ ] Composer: `+` button is **not** stretched horizontally
    - [ ] Keyboard: composer sits above keyboard; no iOS autofill bar regression
@@ -329,5 +325,7 @@ Before shipping UI changes:
 | 12px page margins | 16px to match title |
 | 36px touch-only buttons without 44pt hit | `.iconbtn` pattern |
 | Flat flex column with mixed row controls | Wrapper rows (`.composer-field`) |
-| Composer on workspace view | Chat-only `#composer` |
-| `newBtn` → new session | `newBtn` → `openAddRepo()`; new session via `.tree-new-row` |
+| Composer on projects list | Chat-only `#composer` |
+| `newBtn` → new session | `newBtn` → `register_project`; new session via `.tree-new-row` |
+| Client-only `cwds.push()` | Server `register_project` + `cwds` broadcast |
+| “All Repos” duplicate tree | One session list per project folder only |

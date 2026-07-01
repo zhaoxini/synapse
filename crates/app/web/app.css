@@ -227,6 +227,12 @@ body.mode-chat #pageHead { display: none; }
   flex: 1; min-width: 0; font-size: 17px; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.ws-count {
+  flex: 0 0 auto; min-width: 22px; height: 22px; padding: 0 7px;
+  border-radius: 11px; background: var(--btn-secondary);
+  color: var(--ink-2); font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .ws-chev { color: var(--ink-3); flex: 0 0 auto; transition: transform .15s; }
 .ws-row.expanded .ws-chev { transform: rotate(90deg); }
 
@@ -301,6 +307,7 @@ body.mode-chat #pageHead { display: none; }
 .empty-hint {
   padding: 48px 24px; text-align: center; color: var(--ink-3); font-size: 14px;
 }
+.empty-hint-sub { display: block; margin-top: 8px; font-size: 13px; color: var(--ink-3); }
 .empty-cta {
   display: inline-block; margin-top: 16px; height: 40px; padding: 0 20px;
   border-radius: 20px; background: var(--primary); color: var(--primary-fg);

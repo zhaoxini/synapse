@@ -99,6 +99,67 @@ fn expand_home(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
+/// Canonical path string for stable client grouping (expand ~, canonicalize when possible).
+fn normalize_path_string(p: &str) -> String {
+    let expanded = expand_home(p.trim());
+    let path = if expanded.exists() {
+        expanded.canonicalize().unwrap_or(expanded)
+    } else {
+        expanded
+    };
+    let mut s = path.to_string_lossy().into_owned();
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    s
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ProjectsFile {
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+fn projects_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".synapse").join("projects.json"))
+        .unwrap_or_else(|| PathBuf::from(".synapse/projects.json"))
+}
+
+fn load_manual_projects() -> Vec<String> {
+    let path = projects_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<ProjectsFile>(&s).ok())
+        .map(|f| f.paths)
+        .unwrap_or_default()
+}
+
+fn save_manual_projects(paths: &[String]) -> Result<(), String> {
+    let path = projects_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let file = ProjectsFile {
+        paths: paths.to_vec(),
+    };
+    let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, txt).map_err(|e| e.to_string())
+}
+
+fn merge_projects(discovered: Vec<String>, manual: Vec<String>) -> Vec<String> {
+    let mut set = HashSet::new();
+    for p in discovered.into_iter().chain(manual) {
+        let n = normalize_path_string(&p);
+        if !n.is_empty() {
+            set.insert(n);
+        }
+    }
+    let mut out: Vec<String> = set.into_iter().collect();
+    out.sort();
+    out
+}
+
 /// ponytail: parses the whole (multi-MB) claude.json once at startup; fine for
 /// a boot-time read — revisit only if startup latency ever matters.
 fn discover_projects() -> Vec<String> {
@@ -126,7 +187,7 @@ impl SessionManager {
         // Catalog + default come from Claude Code's own config (+ ~/.synapse
         // customizations); `--default-model`/SYNAPSE_DEFAULT_MODEL overrides.
         let (catalog, default) = discover_catalog(default_model);
-        let cwds = discover_projects();
+        let cwds = merge_projects(discover_projects(), load_manual_projects());
         info!(models = catalog.len(), projects = cwds.len(), default = %default, "config ready");
         let default_model = Some(default).filter(|s| !s.is_empty());
         let meta = load_meta_sync();
@@ -161,11 +222,30 @@ impl SessionManager {
         self.cwds.lock().await.clone()
     }
 
-    /// Re-scan ~/.claude.json projects and return the refreshed list.
+    /// Re-scan ~/.claude.json projects, merge with manually registered paths.
     pub async fn refresh_cwds(&self) -> Vec<String> {
-        let fresh = discover_projects();
-        *self.cwds.lock().await = fresh.clone();
-        fresh
+        let merged = merge_projects(discover_projects(), load_manual_projects());
+        *self.cwds.lock().await = merged.clone();
+        merged
+    }
+
+    /// Register a project path (persisted under ~/.synapse/projects.json).
+    pub async fn register_project(&self, path: &str) -> Result<Vec<String>, String> {
+        let norm = normalize_path_string(path);
+        if norm.is_empty() {
+            return Err("empty path".into());
+        }
+        if !std::path::Path::new(&norm).exists() {
+            return Err(format!("path does not exist: {norm}"));
+        }
+        let mut manual = load_manual_projects();
+        if !manual.iter().any(|p| normalize_path_string(p) == norm) {
+            manual.push(norm.clone());
+            save_manual_projects(&manual)?;
+        }
+        let merged = merge_projects(discover_projects(), manual);
+        *self.cwds.lock().await = merged.clone();
+        Ok(merged)
     }
 
     pub async fn subscribe(&self) -> mpsc::Receiver<Value> {
@@ -855,5 +935,23 @@ mod tests {
         mgr.delete(&s.id).await.unwrap();
         assert!(mgr.list().await.is_empty());
         assert!(mgr.rename(&s.id, "x".into()).await.is_err()); // gone
+    }
+
+    #[tokio::test]
+    async fn register_project_persists_and_merges() {
+        let dir = std::env::temp_dir().join(format!("synapse-reg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SessionManager::new(
+            ClaudeBin(std::path::PathBuf::from("/nonexistent/claude")),
+            std::env::temp_dir(),
+            None,
+        );
+        let path = dir.to_string_lossy().to_string();
+        let out = mgr.register_project(&path).await.unwrap();
+        assert!(out.iter().any(|p| p.contains("synapse-reg")));
+        let again = mgr.register_project(&path).await.unwrap();
+        assert_eq!(out.len(), again.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

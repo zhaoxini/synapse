@@ -39,7 +39,7 @@ function startMockWs() {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
         if (msg.op === "list" || msg.op === "refresh") {
           ws.send(JSON.stringify({ type: "sessions", sessions: mockSessions() }));
-        } else if (msg.op === "refresh_cwds") {
+        } else if (msg.op === "refresh_cwds" || msg.op === "register_project") {
           ws.send(JSON.stringify({ type: "cwds", cwds: ["/workspace/synapse", "/workspace/other"] }));
         } else if (msg.op === "history") {
           setTimeout(() => {
@@ -94,27 +94,30 @@ async function main() {
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
 
     await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
-    ok("Workspaces view is default");
+    ok("Projects view is default");
 
-    (await page.locator("#pageTitle").textContent()) === "Workspaces"
-      ? ok("Workspaces page title") : fail("Workspaces title missing");
+    (await page.locator("#pageTitle").textContent()) === "Projects"
+      ? ok("Projects page title") : fail("Projects title missing");
 
-    (await page.locator(".ws-row").count()) >= 2
-      ? ok("Workspace tree rows rendered") : fail("Workspace tree rows missing");
+    !(await page.locator(".ws-row", { hasText: "All Repos" }).count())
+      ? ok("No duplicate All Repos node") : fail("All Repos aggregate should be removed");
+
+    (await page.locator(".ws-tree-repo").count()) >= 1
+      ? ok("Project folders rendered") : fail("Project folders missing");
 
     (await page.locator(".ws-tree-children .sess-row").count()) > 0
-      ? ok("Sessions nested in workspace tree") : fail("Tree sessions missing");
+      ? ok("Sessions nested under projects") : fail("Tree sessions missing");
 
     !(await page.locator("#composer").isVisible())
-      ? ok("Composer hidden on workspaces") : fail("Composer should be hidden on workspaces");
+      ? ok("Composer hidden on projects list") : fail("Composer should be hidden on projects list");
 
     const sessBefore = await page.evaluate(() => window.__synapse.state.sessions.length);
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("+ stays on workspaces") : fail("+ should not leave workspaces");
+      ? ok("+ stays on projects list") : fail("+ should not leave projects list");
     (await page.locator("#localMenu.show").count()) > 0
-      ? ok("+ opens add repo menu") : fail("+ should open add repo menu");
+      ? ok("+ opens add project menu") : fail("+ should open add project menu");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
     await page.evaluate(() => document.getElementById("localMenu").classList.remove("show"));
@@ -202,7 +205,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Back returns to workspace tree") : fail("Back did not return to tree");
+      ? ok("Back returns to project tree") : fail("Back did not return to tree");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");

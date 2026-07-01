@@ -30,7 +30,7 @@ const state = {
   connected: false,
   busy: false,
   view: "workspaces", // "workspaces" | "chat"
-  expandedRepos: new Set(["__all__"]),
+  expandedProjects: new Set(),
   searchOpen: false,
   searchQuery: "",
   creating: false,
@@ -270,7 +270,7 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
-      if (state.view === "workspaces") renderWorkspaceTree();
+      if (state.view === "workspaces") renderProjectTree();
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -281,7 +281,7 @@ function handle(v) {
     case "event": handleEvent(v.event); break;
     case "error":
       state.creating = false;
-      if (state.view === "workspaces") renderWorkspaceTree();
+      if (state.view === "workspaces") renderProjectTree();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -308,7 +308,7 @@ function handleEvent(evt) {
       showWorkspaces();
       updateChrome();
     }
-    renderWorkspaceTree();
+    renderProjectTree();
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
@@ -1679,7 +1679,7 @@ function updatePulse() {
 // =================== sessions ===================
 function setSessions(list) {
   state.sessions = list || [];
-  if (state.view === "workspaces") renderWorkspaceTree();
+  if (state.view === "workspaces") renderProjectTree();
   // After a server restart, auto-created sessions come back with new ids, so a
   // still-selected old id is now dead — requesting its history returns found:false
   // and the view stays stuck on the welcome page. Drop the dead id and fall through
@@ -1693,7 +1693,7 @@ function setSessions(list) {
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
-  if (state.view === "workspaces") renderWorkspaceTree();
+  if (state.view === "workspaces") renderProjectTree();
 }
 // Track a session's running state from live turn_started/turn_stopped (broadcast
 // for every session) so the drawer dot and busy-on-open stay correct even for
@@ -1702,7 +1702,7 @@ function setSessionState(id, st) {
   const ses = state.sessions.find(x => x.id === id);
   if (!ses || ses.state === st) return;
   ses.state = st;
-  if (state.view === "workspaces") renderWorkspaceTree();
+  if (state.view === "workspaces") renderProjectTree();
   if (id === state.activeId && state.view === "chat") updateChrome();
 }
 // Session titles come from the transcript's first user line, which is often
@@ -1789,10 +1789,72 @@ function showRowContext(s) {
 }
 document.addEventListener("click", closeRowMenu);
 
-function workspacePaths() {
-  const paths = new Set(state.cwds || []);
-  for (const s of state.sessions) if (s.cwd) paths.add(s.cwd);
-  return [...paths].sort();
+function normalizePath(p) {
+  if (!p) return "";
+  let s = String(p).trim();
+  while (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+function projectPaths() {
+  const paths = new Set();
+  for (const p of state.cwds || []) {
+    const n = normalizePath(p);
+    if (n) paths.add(n);
+  }
+  for (const s of state.sessions) {
+    const n = normalizePath(s.cwd);
+    if (n) paths.add(n);
+  }
+  const latest = (path) => {
+    let t = 0;
+    for (const s of state.sessions) {
+      if (normalizePath(s.cwd) !== path) continue;
+      t = Math.max(t, s.started_at || 0);
+    }
+    return t;
+  };
+  return [...paths].sort((a, b) => {
+    const d = latest(b) - latest(a);
+    if (d) return d;
+    return basename(a).localeCompare(basename(b));
+  });
+}
+
+function ensureProjectsVisible() {
+  if (state.activeId) {
+    const s = state.sessions.find(x => x.id === state.activeId);
+    if (s?.cwd) state.expandedProjects.add(normalizePath(s.cwd));
+  }
+  if (!state.expandedProjects.size) {
+    for (const p of projectPaths()) {
+      if (filteredSessions(p).length) state.expandedProjects.add(p);
+    }
+  }
+}
+
+function toggleProject(key) {
+  if (state.expandedProjects.has(key)) state.expandedProjects.delete(key);
+  else state.expandedProjects.add(key);
+  renderProjectTree();
+  haptic("light");
+}
+
+function filteredSessions(projectPath) {
+  const q = (state.searchQuery || "").toLowerCase();
+  return state.sessions
+    .filter(s => state.showArchived ? s.archived : !s.archived)
+    .filter(s => !projectPath || normalizePath(s.cwd) === projectPath)
+    .filter(s => {
+      if (!q) return true;
+      const title = cleanTitle(s.name).toLowerCase();
+      const repo = basename(s.cwd || "").toLowerCase();
+      return title.includes(q) || repo.includes(q);
+    })
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+      return (b.started_at || 0) - (a.started_at || 0);
+    });
 }
 
 const FOLDER_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 8h6l2 2h8v10H4V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
@@ -1806,30 +1868,6 @@ function formatNum(n) {
 function sessionIconHtml(s) {
   if (s.state === "busy") return `<span class="sess-icon spark">${SPARK_SVG}</span>`;
   return `<span class="sess-icon dot"></span>`;
-}
-
-function ensureTreeExpanded() {
-  state.expandedRepos.add("__all__");
-  for (const p of workspacePaths()) state.expandedRepos.add(p);
-}
-
-function toggleRepo(key) {
-  if (state.expandedRepos.has(key)) state.expandedRepos.delete(key);
-  else state.expandedRepos.add(key);
-  renderWorkspaceTree();
-  haptic("light");
-}
-
-function filteredSessions(cwd) {
-  const q = (state.searchQuery || "").toLowerCase();
-  return state.sessions
-    .filter(s => state.showArchived ? s.archived : !s.archived)
-    .filter(s => !cwd || s.cwd === cwd)
-    .filter(s => !q || cleanTitle(s.name).toLowerCase().includes(q))
-    .sort((a, b) => {
-      if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
-      return (b.started_at || 0) - (a.started_at || 0);
-    });
 }
 
 function appendSessionRow(parent, s) {
@@ -1859,7 +1897,8 @@ function appendSessionRow(parent, s) {
   bindLongPress(row, s);
 }
 
-function renderWorkspaceTree() {
+function renderProjectTree() {
+  ensureProjectsVisible();
   const list = $("workspaceList");
   if (!list) return;
   list.innerHTML = "";
@@ -1871,27 +1910,36 @@ function renderWorkspaceTree() {
     archivedToggle.textContent = state.showArchived ? "Hide archived" : "Show archived";
   }
 
-  const paths = workspacePaths();
-  const nodes = [{ key: "__all__", label: "All Repos", cwd: null }];
-  for (const p of paths) nodes.push({ key: p, label: basename(p), cwd: p });
+  const paths = projectPaths();
+  if (!paths.length && !q) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.innerHTML = `No projects yet<br><span class="empty-hint-sub">Tap + to add a project folder</span>`;
+    list.appendChild(hint);
+    return;
+  }
 
-  for (const node of nodes) {
-    const sessions = filteredSessions(node.cwd);
+  for (const path of paths) {
+    const label = basename(path);
+    const sessions = filteredSessions(path);
     if (q) {
-      const labelMatch = node.label.toLowerCase().includes(q);
+      const labelMatch = label.toLowerCase().includes(q);
       const sessionMatch = sessions.length > 0;
       if (!labelMatch && !sessionMatch) continue;
-      if (sessionMatch) state.expandedRepos.add(node.key);
+      if (sessionMatch || labelMatch) state.expandedProjects.add(path);
     }
 
-    const expanded = state.expandedRepos.has(node.key);
+    const expanded = state.expandedProjects.has(path);
     const row = document.createElement("div");
     row.className = "ws-row ws-tree-repo" + (expanded ? " expanded" : "");
+    const count = sessions.length;
+    const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
     row.innerHTML =
       `<span class="ws-icon">${FOLDER_SVG}</span>` +
-      `<span class="ws-label">${escapeHtml(node.label)}</span>` +
+      `<span class="ws-label">${escapeHtml(label)}</span>` +
+      countHtml +
       `<span class="ws-chev"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
-    row.addEventListener("click", () => toggleRepo(node.key));
+    row.addEventListener("click", () => toggleProject(path));
     list.appendChild(row);
 
     if (!expanded) continue;
@@ -1904,15 +1952,12 @@ function renderWorkspaceTree() {
     newRow.textContent = "+ New session";
     newRow.addEventListener("click", (e) => {
       e.stopPropagation();
-      startNewDraft(node.cwd);
+      startNewDraft(path);
     });
     children.appendChild(newRow);
 
-    const creatingHere = state.creating && (
-      node.key === "__all__" ? !state.pendingCwd :
-      state.pendingCwd === node.cwd
-    );
-    if (creatingHere) {
+    const pending = normalizePath(state.pendingCwd);
+    if (state.creating && pending === path) {
       const row = document.createElement("div");
       row.className = "sess-row creating";
       row.innerHTML =
@@ -1935,12 +1980,13 @@ function renderWorkspaceTree() {
   }
 }
 
-function openAddRepo() {
+function openAddProject() {
   openLocalMenu((path) => {
-    state.pendingCwd = path;
-    if (!state.cwds.includes(path)) state.cwds.push(path);
-    state.expandedRepos.add(path);
-    renderWorkspaceTree();
+    const norm = normalizePath(path);
+    state.pendingCwd = norm;
+    state.expandedProjects.add(norm);
+    send({ op: "register_project", path: norm });
+    renderProjectTree();
   });
 }
 
@@ -1977,9 +2023,9 @@ function showWorkspaces() {
   state.view = "workspaces";
   document.body.classList.remove("mode-chat");
   document.body.classList.add("mode-workspaces");
-  ensureTreeExpanded();
+  ensureProjectsVisible();
   updateChrome();
-  renderWorkspaceTree();
+  renderProjectTree();
 }
 
 function showChat(pushHistory) {
@@ -2000,7 +2046,7 @@ function updateChrome() {
   const searchBtn = $("searchBtn");
   if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
   if (state.view === "workspaces") {
-    pageTitle.textContent = "Workspaces";
+    pageTitle.textContent = "Projects";
     chatTitle.hidden = true;
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
@@ -2117,7 +2163,7 @@ window.addEventListener("popstate", () => {
   }
 });
 $("workspaceAvatar").addEventListener("click", () => { haptic("light"); showWorkspaces(); });
-$("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddRepo(); });
+$("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddProject(); });
 $("searchBtn").addEventListener("click", () => {
   haptic("light");
   state.searchOpen = !state.searchOpen;
@@ -2126,18 +2172,18 @@ $("searchBtn").addEventListener("click", () => {
 });
 searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
-  if (state.view === "workspaces") renderWorkspaceTree();
+  if (state.view === "workspaces") renderProjectTree();
 });
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
-  renderWorkspaceTree();
+  renderProjectTree();
 });
 
 function startNewDraft(cwd) {
   if (state.creating) return;
   state.activeId = "";
   state.pendingSend = null;
-  if (cwd !== undefined) state.pendingCwd = cwd;
+  if (cwd !== undefined) state.pendingCwd = normalizePath(cwd);
   clearMessages();
   state.turn = null;
   setBusy(false);
@@ -2145,7 +2191,7 @@ function startNewDraft(cwd) {
   syncLocalLabel();
   const es = $("emptySub");
   if (es) {
-    const c = state.pendingCwd || workspacePaths()[0];
+    const c = state.pendingCwd || projectPaths()[0];
     es.textContent = c ? basename(c) : "";
   }
   showChat();
@@ -2156,11 +2202,11 @@ function newSession() {
   if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
-  const cwd = state.pendingCwd || workspacePaths()[0];
+  const cwd = state.pendingCwd || projectPaths()[0];
   if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   state.creating = true;
-  if (state.view === "workspaces") renderWorkspaceTree();
+  if (state.view === "workspaces") renderProjectTree();
   send({ op: "create", opts });
 }
 
