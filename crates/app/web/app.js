@@ -1997,6 +1997,8 @@ function updateChrome() {
   const q = state.searchQuery || "";
   if (searchInput && searchInput.value !== q) searchInput.value = q;
   searchWrap.classList.toggle("hidden", !state.searchOpen);
+  const searchBtn = $("searchBtn");
+  if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
   if (state.view === "workspaces") {
     pageTitle.textContent = "Workspaces";
     chatTitle.hidden = true;
@@ -2125,18 +2127,6 @@ $("searchBtn").addEventListener("click", () => {
 searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
   if (state.view === "workspaces") renderWorkspaceTree();
-});
-$("menuBtn").addEventListener("click", () => {
-  haptic("light");
-  const archivedAny = state.sessions.some(s => s.archived);
-  if (archivedAny) {
-    state.showArchived = !state.showArchived;
-    renderWorkspaceTree();
-    toast(state.showArchived ? "Showing archived" : "Hiding archived");
-  } else {
-    send({ op: "refresh" });
-    toast("Refreshed");
-  }
 });
 $("micBtn").addEventListener("click", () => toast("Voice input not available"));
 $("archivedToggle").addEventListener("click", () => {
