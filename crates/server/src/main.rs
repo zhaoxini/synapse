@@ -56,6 +56,10 @@ enum Commands {
     },
     /// Print a short pairing code for the mobile app (requires prior login).
     PairingCode,
+    /// Show saved account / device info.
+    Status,
+    /// Sign out — remove local credentials (does not delete the cloud account).
+    Logout,
 }
 
 /// Arguments for `synapse-server run` (also the default when no subcommand).
@@ -173,11 +177,27 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::PairingCode) => {
-            let cfg = account::Config::load()?.context("not logged in — run synapse-server login first")?;
+            let cfg =
+                account::Config::load()?.context("not signed in — run synapse-server first")?;
             let code = account::create_pairing_code(&cfg).await?;
             println!("\n  Pairing code:  {}\n", code.code);
             println!("  Expires in {} seconds.", code.expires_in);
-            println!("  Enter this code in the Synapse app (same account: {}).\n", cfg.user_email);
+            println!(
+                "  Enter this code in the Synapse app (same account: {}).\n",
+                cfg.user_email
+            );
+            Ok(())
+        }
+        Some(Commands::Status) => {
+            let cfg =
+                account::Config::load()?.context("not signed in — run synapse-server first")?;
+            account::print_status(&cfg);
+            Ok(())
+        }
+        Some(Commands::Logout) => {
+            account::clear_config()?;
+            println!("\n  Signed out. Local credentials removed.\n");
+            println!("  Run synapse-server again to sign in.\n");
             Ok(())
         }
     }
@@ -264,37 +284,23 @@ async fn run_server(args: RunArgs) -> Result<()> {
         .clone()
         .or_else(|| saved.as_ref().map(|c| c.uplink_url()));
     if let Some(relay_url) = relay_url {
-        let (device_id, relay_token, connect_host) = if let Some(cfg) = &saved {
+        let (device_id, relay_token) = if let Some(cfg) = &saved {
             if args.relay_device_id.is_none() && args.relay.is_none() {
-                (
-                    cfg.device_id.clone(),
-                    cfg.device_token.clone(),
-                    cfg.relay_host.clone(),
-                )
+                (cfg.device_id.clone(), cfg.device_token.clone())
             } else {
                 (
-                    args.relay_device_id.clone().unwrap_or_else(|| {
-                        uuid::Uuid::new_v4().to_string()[..8].to_string()
-                    }),
+                    args.relay_device_id
+                        .clone()
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()[..8].to_string()),
                     args.relay_token.clone().unwrap_or_else(|| token.clone()),
-                    relay_url
-                        .replace("wss://", "")
-                        .replace("ws://", "")
-                        .replace("/uplink", "")
-                        .replace("/connect", ""),
                 )
             }
         } else {
             (
-                args.relay_device_id.clone().unwrap_or_else(|| {
-                    uuid::Uuid::new_v4().to_string()[..8].to_string()
-                }),
+                args.relay_device_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()[..8].to_string()),
                 args.relay_token.clone().unwrap_or_else(|| token.clone()),
-                relay_url
-                    .replace("wss://", "")
-                    .replace("ws://", "")
-                    .replace("/uplink", "")
-                    .replace("/connect", ""),
             )
         };
         let local_ws = format!(
@@ -302,11 +308,20 @@ async fn run_server(args: RunArgs) -> Result<()> {
             if args.tls { "wss" } else { "ws" },
             args.port
         );
-        let app_connect = format!(
-            "synapse://{connect_host}/connect?deviceId={device_id}&token={relay_token}&tls=1"
-        );
-        println!("  Relay uplink:   {relay_url} (deviceId={device_id})");
-        println!("  Relay pair URL: {app_connect}\n");
+        if saved.is_none() {
+            let connect_host = relay_url
+                .replace("wss://", "")
+                .replace("ws://", "")
+                .replace("/uplink", "")
+                .replace("/connect", "");
+            let app_connect = format!(
+                "synapse://{connect_host}/connect?deviceId={device_id}&token={relay_token}&tls=1"
+            );
+            println!("  Relay uplink:   {relay_url} (deviceId={device_id})");
+            println!("  Relay pair URL: {app_connect}\n");
+        } else {
+            tracing::info!(%relay_url, %device_id, "relay uplink starting");
+        }
         let relay_url = relay_url.clone();
         let device_id = device_id.clone();
         let relay_token = relay_token.clone();

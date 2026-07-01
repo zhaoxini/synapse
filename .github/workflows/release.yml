@@ -1,0 +1,122 @@
+# Synapse release — builds server + relay binaries for all platforms and
+# publishes a GitHub Release when a version tag is pushed (e.g. v0.2.0).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            ext: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            ext: ""
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+            ext: .exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux cross toolchain (aarch64)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build synapse-server + synapse-relay (release)
+        env:
+          SYNAPSE_RELAY: ${{ vars.SYNAPSE_RELAY }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release -p synapse-server -p synapse-relay --target ${{ matrix.target }}
+
+      - name: Stage release directory
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="synapse-${VERSION}-${{ matrix.target }}"
+          mkdir -p "${STAGE}/bin"
+          cp "target/${{ matrix.target }}/release/synapse-server${{ matrix.ext }}" "${STAGE}/bin/"
+          cp "target/${{ matrix.target }}/release/synapse-relay${{ matrix.ext }}" "${STAGE}/bin/"
+          cp scripts/SERVER-README.md "${STAGE}/README.md"
+          cp scripts/install-server.sh "${STAGE}/install.sh"
+          echo "${VERSION}" > "${STAGE}/VERSION"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd "$(dirname "${STAGE}")" && zip -r "../${STAGE}.zip" "$(basename "${STAGE}")")
+          else
+            tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          fi
+          ls -lh "${STAGE}.${{ matrix.archive }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-${{ matrix.target }}
+          path: synapse-*-${{ matrix.target }}.${{ matrix.archive }}
+
+  release:
+    name: publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find dist -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/**/*
+          body_path: scripts/RELEASE-NOTES.md

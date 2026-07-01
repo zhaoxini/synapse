@@ -74,7 +74,13 @@ impl Db {
         Ok(())
     }
 
-    pub fn create_user(&self, id: &str, email: &str, password_hash: &str, name: &str) -> Result<()> {
+    pub fn create_user(
+        &self,
+        id: &str,
+        email: &str,
+        password_hash: &str,
+        name: &str,
+    ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn
             .lock()
@@ -88,9 +94,8 @@ impl Db {
 
     pub fn user_by_email(&self, email: &str) -> Result<Option<(User, String)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, email, name, password_hash FROM users WHERE email = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, email, name, password_hash FROM users WHERE email = ?1")?;
         let mut rows = stmt.query(params![email])?;
         if let Some(row) = rows.next()? {
             Ok(Some((
@@ -142,7 +147,13 @@ impl Db {
         }
     }
 
-    pub fn create_device(&self, id: &str, user_id: &str, name: &str, device_token: &str) -> Result<()> {
+    pub fn create_device(
+        &self,
+        id: &str,
+        user_id: &str,
+        name: &str,
+        device_token: &str,
+    ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn.lock().unwrap().execute(
             "INSERT INTO devices (id, user_id, name, device_token, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -209,9 +220,8 @@ impl Db {
     pub fn pairing_code_device(&self, code: &str) -> Result<Option<String>> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT device_id FROM pairing_codes WHERE code = ?1 AND expires_at > ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT device_id FROM pairing_codes WHERE code = ?1 AND expires_at > ?2")?;
         let mut rows = stmt.query(params![code, now])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))

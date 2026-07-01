@@ -255,8 +255,14 @@ fn tool_diff(blk: &Value) -> (u32, u32) {
     let args = blk.get("input").unwrap_or(blk);
     match name {
         "Edit" => {
-            let old = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-            let new = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+            let old = args
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new = args
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             count_line_diff(old, new)
         }
         "MultiEdit" => {

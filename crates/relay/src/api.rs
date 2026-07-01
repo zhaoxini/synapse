@@ -113,10 +113,9 @@ async fn login(State(s): State<AppState>, Json(body): Json<AuthBody>) -> impl In
 
 async fn login_inner(s: &AppState, body: AuthBody) -> anyhow::Result<AuthResp> {
     let email = body.email.trim().to_lowercase();
-    let (user, hash) = s
-        .db
-        .user_by_email(&email)?
-        .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
+    let (user, hash) =
+        s.db.user_by_email(&email)?
+            .ok_or_else(|| anyhow::anyhow!("invalid email or password"))?;
     if !verify_password(&body.password, &hash)? {
         anyhow::bail!("invalid email or password");
     }
@@ -239,7 +238,11 @@ async fn create_pairing_code(State(s): State<AppState>, headers: HeaderMap) -> i
         Ok(v) => v,
         Err(r) => return r,
     };
-    if !s.db.verify_device_token(&device_id, &device_token).unwrap_or(false) {
+    if !s
+        .db
+        .verify_device_token(&device_id, &device_token)
+        .unwrap_or(false)
+    {
         return api_error(StatusCode::UNAUTHORIZED, "invalid device credentials");
     }
     let code = new_pairing_code();
@@ -287,11 +290,14 @@ async fn claim_pairing_code(
     }
 }
 
-fn issue_connect_token(s: &AppState, device_id: &str, user_id: &str) -> anyhow::Result<ConnectResp> {
+fn issue_connect_token(
+    s: &AppState,
+    device_id: &str,
+    user_id: &str,
+) -> anyhow::Result<ConnectResp> {
     let token = new_connect_token();
     let expires = chrono::Utc::now().timestamp() + CONNECT_TOKEN_SECS;
-    s.db
-        .create_connect_token(&token, device_id, user_id, expires)?;
+    s.db.create_connect_token(&token, device_id, user_id, expires)?;
     Ok(ConnectResp {
         device_id: device_id.to_string(),
         connect_token: token,
@@ -302,6 +308,7 @@ fn issue_connect_token(s: &AppState, device_id: &str, user_id: &str) -> anyhow::
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn bearer_user(s: &AppState, headers: &HeaderMap) -> Result<String, axum::response::Response> {
     let auth = headers
         .get(http::header::AUTHORIZATION)
@@ -310,13 +317,16 @@ fn bearer_user(s: &AppState, headers: &HeaderMap) -> Result<String, axum::respon
     let token = auth
         .strip_prefix("Bearer ")
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "expected Bearer token"))?;
-    s.db
-        .session_user_id(token)
+    s.db.session_user_id(token)
         .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "invalid or expired session"))
 }
 
-fn device_auth(_s: &AppState, headers: &HeaderMap) -> Result<(String, String), axum::response::Response> {
+#[allow(clippy::result_large_err)]
+fn device_auth(
+    _s: &AppState,
+    headers: &HeaderMap,
+) -> Result<(String, String), axum::response::Response> {
     let auth = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -338,11 +348,7 @@ fn api_error(status: StatusCode, msg: &str) -> axum::response::Response {
 }
 
 /// Verify a connect or device token for WS /connect and /uplink.
-pub fn verify_ws_token(
-    db: &Db,
-    device_id: &str,
-    token: &str,
-) -> Result<bool, anyhow::Error> {
+pub fn verify_ws_token(db: &Db, device_id: &str, token: &str) -> Result<bool, anyhow::Error> {
     if db.verify_device_token(device_id, token)? {
         return Ok(true);
     }

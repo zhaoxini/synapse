@@ -364,16 +364,17 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 }
             }
             "archive" => {
-                let ids: Vec<String> = if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                } else {
-                    cmd.get("sessionId")
-                        .and_then(|v| v.as_str())
-                        .map(|s| vec![s.to_string()])
-                        .unwrap_or_default()
-                };
+                let ids: Vec<String> =
+                    if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    } else {
+                        cmd.get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .map(|s| vec![s.to_string()])
+                            .unwrap_or_default()
+                    };
                 if ids.is_empty() {
                     continue;
                 }
@@ -386,16 +387,17 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 }
             }
             "unarchive" => {
-                let ids: Vec<String> = if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                } else {
-                    cmd.get("sessionId")
-                        .and_then(|v| v.as_str())
-                        .map(|s| vec![s.to_string()])
-                        .unwrap_or_default()
-                };
+                let ids: Vec<String> =
+                    if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    } else {
+                        cmd.get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .map(|s| vec![s.to_string()])
+                            .unwrap_or_default()
+                    };
                 if ids.is_empty() {
                     continue;
                 }
@@ -410,7 +412,9 @@ async fn client_loop(state: AppState, socket: WebSocket) {
             "refresh_cwds" => {
                 let cwds = state.manager.refresh_cwds().await;
                 let _ = out_tx
-                    .send(Message::Text(json!({"type":"cwds","cwds":cwds}).to_string()))
+                    .send(Message::Text(
+                        json!({"type":"cwds","cwds":cwds}).to_string(),
+                    ))
                     .await;
             }
             "register_project" => {
@@ -418,13 +422,16 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 match state.manager.register_project(path).await {
                     Ok(cwds) => {
                         let _ = out_tx
-                            .send(Message::Text(json!({"type":"cwds","cwds":cwds}).to_string()))
+                            .send(Message::Text(
+                                json!({"type":"cwds","cwds":cwds}).to_string(),
+                            ))
                             .await;
                     }
                     Err(e) => {
                         let _ = out_tx
                             .send(Message::Text(
-                                json!({"type":"error","error":e,"op":"register_project"}).to_string(),
+                                json!({"type":"error","error":e,"op":"register_project"})
+                                    .to_string(),
                             ))
                             .await;
                     }

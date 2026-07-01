@@ -20,9 +20,7 @@ pub struct Config {
 
 impl Config {
     pub fn path() -> PathBuf {
-        homedir()
-            .join(".synapse")
-            .join("config.json")
+        homedir().join(".synapse").join("config.json")
     }
 
     pub fn load() -> Result<Option<Self>> {
@@ -75,7 +73,10 @@ pub fn relay_urls(relay: &str) -> Result<(String, String, String, u16, bool)> {
         .trim_start_matches("ws://");
     let (host, port) = if let Some((h, p)) = host_port.rsplit_once(':') {
         if p.chars().all(|c| c.is_ascii_digit()) {
-            (h.to_string(), p.parse().unwrap_or(if tls { 443 } else { 80 }))
+            (
+                h.to_string(),
+                p.parse().unwrap_or(if tls { 443 } else { 80 }),
+            )
         } else {
             (host_port.to_string(), if tls { 443 } else { 80 })
         }
@@ -94,6 +95,7 @@ struct AuthBody<'a> {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct AuthResp {
     session_token: String,
     user: UserResp,
@@ -103,6 +105,7 @@ struct AuthResp {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct UserResp {
     email: String,
 }
@@ -148,8 +151,18 @@ pub async fn register_account(
         .json()
         .await
         .context("register response")?;
-    register_device(&client, &api, &auth.session_token, device_name, ws, host, port, tls, email)
-        .await
+    register_device(
+        &client,
+        &api,
+        &auth.session_token,
+        device_name,
+        ws,
+        host,
+        port,
+        tls,
+        email,
+    )
+    .await
 }
 
 pub async fn login_account(
@@ -175,10 +188,21 @@ pub async fn login_account(
         .json()
         .await
         .context("login response")?;
-    register_device(&client, &api, &auth.session_token, device_name, ws, host, port, tls, email)
-        .await
+    register_device(
+        &client,
+        &api,
+        &auth.session_token,
+        device_name,
+        ws,
+        host,
+        port,
+        tls,
+        email,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn register_device(
     client: &reqwest::Client,
     api: &str,
@@ -242,7 +266,34 @@ pub fn default_device_name() -> String {
 }
 
 pub fn default_relay_url() -> Option<String> {
-    std::env::var("SYNAPSE_RELAY").ok().filter(|s| !s.trim().is_empty())
+    std::env::var("SYNAPSE_RELAY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            let baked = env!("SYNAPSE_DEFAULT_RELAY");
+            if baked.is_empty() {
+                None
+            } else {
+                Some(baked.to_string())
+            }
+        })
+}
+
+pub fn clear_config() -> Result<()> {
+    let path = Config::path();
+    if path.exists() {
+        std::fs::remove_file(&path).context("remove config")?;
+    }
+    Ok(())
+}
+
+pub fn print_status(cfg: &Config) {
+    println!("\n  Synapse server status\n");
+    println!("  Config:     {}", Config::path().display());
+    println!("  Email:      {}", cfg.user_email);
+    println!("  Device:     {} ({})", cfg.device_name, cfg.device_id);
+    println!("  Relay:      {}", cfg.relay_ws);
+    println!();
 }
 
 /// First-run interactive setup: email + password only. Relay comes from
@@ -250,11 +301,16 @@ pub fn default_relay_url() -> Option<String> {
 pub async fn interactive_setup() -> Result<Config> {
     println!("\n  Welcome to Synapse — first-time setup\n");
     let relay = match default_relay_url() {
-        Some(u) => u,
+        Some(u) => {
+            println!("  Relay:          {u}\n");
+            u
+        }
         None => {
             let url = read_line("Relay server [wss://relay.example.com]: ")?;
             if url.is_empty() {
-                bail!("relay URL required (set SYNAPSE_RELAY or enter it now)");
+                bail!(
+                    "relay URL required — set SYNAPSE_RELAY or rebuild with SYNAPSE_RELAY=wss://…"
+                );
             }
             url
         }

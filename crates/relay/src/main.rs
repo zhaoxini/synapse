@@ -109,9 +109,14 @@ async fn main() -> Result<()> {
     println!("  Listen:        {scheme}://{addr}");
     println!("  Public host:   {public_host}");
     println!("  Database:      {}", args.db.display());
-    println!("  API:           {scheme}://{public_host}:{}/api/v1/...", args.port);
+    println!(
+        "  API:           {scheme}://{public_host}:{}/api/v1/...",
+        args.port
+    );
     println!("  Server uplink: {scheme}://{public_host}/uplink?deviceId=<ID>&token=<DEVICE_TOKEN>");
-    println!("  App connect:   {scheme}://{public_host}/connect?deviceId=<ID>&token=<CONNECT_TOKEN>\n");
+    println!(
+        "  App connect:   {scheme}://{public_host}/connect?deviceId=<ID>&token=<CONNECT_TOKEN>\n"
+    );
 
     if let (Some(cert), Some(key)) = (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         let cfg = load_tls(cert, key).await?;

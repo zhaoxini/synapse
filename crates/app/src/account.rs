@@ -26,7 +26,9 @@ impl AppConfig {
             return Ok(None);
         }
         let raw = std::fs::read_to_string(&path).context("read app config")?;
-        Ok(Some(serde_json::from_str(&raw).context("parse app config")?))
+        Ok(Some(
+            serde_json::from_str(&raw).context("parse app config")?,
+        ))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -73,7 +75,10 @@ pub fn relay_urls(relay: &str) -> Result<(String, String, String, u16, bool)> {
         .trim_start_matches("ws://");
     let (host, port) = if let Some((h, p)) = host_port.rsplit_once(':') {
         if p.chars().all(|c| c.is_ascii_digit()) {
-            (h.to_string(), p.parse().unwrap_or(if tls { 443 } else { 80 }))
+            (
+                h.to_string(),
+                p.parse().unwrap_or(if tls { 443 } else { 80 }),
+            )
         } else {
             (host_port.to_string(), if tls { 443 } else { 80 })
         }
@@ -134,12 +139,7 @@ impl AccountClient {
         }
     }
 
-    pub async fn register(
-        relay: &str,
-        email: &str,
-        password: &str,
-        name: &str,
-    ) -> Result<Self> {
+    pub async fn register(relay: &str, email: &str, password: &str, name: &str) -> Result<Self> {
         let (api, ws, _host, _port, _tls) = relay_urls(relay)?;
         let auth: AuthResp = reqwest::Client::new()
             .post(format!("{api}/api/v1/auth/register"))

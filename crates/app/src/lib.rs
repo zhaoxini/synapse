@@ -39,7 +39,10 @@ fn connect_relay(net: &NetHandle, resp: &ConnectResp) {
     });
 }
 
-fn spawn_account_task(_weak: slint::Weak<App>, fut: impl std::future::Future<Output = ()> + Send + 'static) {
+fn spawn_account_task(
+    _weak: slint::Weak<App>,
+    fut: impl std::future::Future<Output = ()> + Send + 'static,
+) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

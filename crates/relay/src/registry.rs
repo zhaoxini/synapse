@@ -36,7 +36,11 @@ impl Registry {
     }
 
     /// Register an online device and return its app-slot handle.
-    pub async fn register(&self, device_id: &str, server_tx: FrameTx) -> Arc<Mutex<Option<FrameTx>>> {
+    pub async fn register(
+        &self,
+        device_id: &str,
+        server_tx: FrameTx,
+    ) -> Arc<Mutex<Option<FrameTx>>> {
         let slot = Arc::new(Mutex::new(None));
         self.devices.insert(
             device_id.to_string(),

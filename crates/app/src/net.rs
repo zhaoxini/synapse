@@ -120,7 +120,14 @@ async fn net_main(weak: Weak<App>, rx: Receiver<NetCmd>) {
     // Channel closed (UI thread gone) — let the runtime drop.
 }
 
-fn build_url(host: &str, port: &str, token: &str, tls: bool, path: &str, device_id: &str) -> String {
+fn build_url(
+    host: &str,
+    port: &str,
+    token: &str,
+    tls: bool,
+    path: &str,
+    device_id: &str,
+) -> String {
     let scheme = if tls { "wss" } else { "ws" };
     if path.is_empty() {
         format!("{scheme}://{host}:{port}/?token={token}")
