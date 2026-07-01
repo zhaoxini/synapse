@@ -1993,11 +1993,10 @@ function diffSubtitle(s) {
 }
 
 function sessionSubtitle(s) {
-  if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
+  if (s.state === "busy") return { text: "Working…", cls: "working", html: "" };
   if (s.state === "error") {
     const diff = diffSubtitle(s);
-    const err = `<span class="fail-mark">✗</span> 1 Check Failed`;
-    const html = diff ? `${err} · ${diff}` : err;
+    const html = diff ? `Failed · ${diff}` : "Failed";
     return { text: "", cls: "error", html };
   }
   const diff = diffSubtitle(s);
@@ -2005,8 +2004,8 @@ function sessionSubtitle(s) {
   const time = t ? relTime(t) : "";
   if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
   if (diff) return { text: "", cls: "", html: diff };
-  if (!diff) return { text: "No Changes", cls: "muted", html: "" };
-  return { text: "", cls: "", html: "" };
+  if (time) return { text: time, cls: "muted", html: "" };
+  return { text: "", cls: "muted", html: "" };
 }
 
 let navFromPop = false;
@@ -2056,14 +2055,6 @@ function updateChrome() {
     chatTitle.hidden = false;
     inputEl.placeholder = "Follow up…";
   }
-}
-
-function bindArchiveBtn(btn, s) {
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    send({ op: "archive", sessionId: s.id });
-    haptic("medium");
-  });
 }
 
 function bindLongPress(row, s) {
@@ -2149,15 +2140,10 @@ function renderSessions() {
         `<div class="sess-body">` +
           `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
           subHtml +
-        `</div>` +
-        `<button type="button" class="sess-archive-btn" aria-label="Archive">${ARCHIVE_SVG}</button>`;
+        `</div>`;
       wrap.appendChild(row);
       list.appendChild(wrap);
-      row.addEventListener("click", (e) => {
-        if (e.target.closest(".sess-archive-btn")) return;
-        select(s.id);
-      });
-      bindArchiveBtn(row.querySelector(".sess-archive-btn"), s);
+      row.addEventListener("click", () => select(s.id));
       bindLongPress(row, s);
     }
   }
@@ -2303,7 +2289,6 @@ $("menuBtn").addEventListener("click", () => {
     toast("Refreshed");
   }
 });
-$("micBtn")?.addEventListener("click", () => {});
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
   renderSessions();
