@@ -67,7 +67,11 @@ async function main() {
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT, "01-repos.png"), fullPage: false });
 
-    await page.locator(".repo-section .sess-row").first().click();
+    await page.locator(".repo-row").first().click();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT, "01-repos-drawer.png"), fullPage: false });
+
+    await page.locator("#drawerBody .sess-row").first().click();
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(OUT, "02-chat.png"), fullPage: false });
 

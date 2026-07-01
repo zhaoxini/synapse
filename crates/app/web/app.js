@@ -30,6 +30,7 @@ const state = {
   connected: false,
   busy: false,
   view: "workspaces", // "workspaces" | "chat" — home = repo list
+  sessionDrawerRepo: null,
   searchOpen: false,
   searchQuery: "",
   creating: false,
@@ -1822,15 +1823,10 @@ function repoPaths() {
   });
 }
 
-function renderRepoSessions(parent, path) {
-  const newRow = document.createElement("div");
-  newRow.className = "tree-new-row";
-  newRow.textContent = "+ New session";
-  newRow.addEventListener("click", (e) => {
-    e.stopPropagation();
-    startNewDraft(path);
-  });
-  parent.appendChild(newRow);
+function renderSessionDrawerBody(path) {
+  const body = $("drawerBody");
+  if (!body || normalizePath(state.sessionDrawerRepo) !== normalizePath(path)) return;
+  body.innerHTML = "";
 
   const pending = normalizePath(state.pendingCwd);
   if (state.creating && pending === normalizePath(path)) {
@@ -1840,7 +1836,7 @@ function renderRepoSessions(parent, path) {
       sessionIconHtml({ state: "busy" }) +
       `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
       `<div class="sess-sub working">Working</div></div>`;
-    parent.appendChild(row);
+    body.appendChild(row);
   }
 
   const sessions = filteredSessions(path);
@@ -1848,10 +1844,29 @@ function renderRepoSessions(parent, path) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
     hint.textContent = "No sessions yet";
-    parent.appendChild(hint);
+    body.appendChild(hint);
   } else {
-    for (const s of sessions) appendSessionRow(parent, s);
+    for (const s of sessions) appendSessionRow(body, s);
   }
+}
+
+function openSessionDrawer(path) {
+  const norm = normalizePath(path);
+  if (!norm) return;
+  state.sessionDrawerRepo = norm;
+  $("drawerTitle").textContent = basename(norm);
+  renderSessionDrawerBody(norm);
+  $("drawerMask").classList.add("show");
+  $("sessionDrawer").classList.add("show");
+  $("sessionDrawer").setAttribute("aria-hidden", "false");
+  haptic("light");
+}
+
+function closeSessionDrawer() {
+  state.sessionDrawerRepo = null;
+  $("drawerMask").classList.remove("show");
+  $("sessionDrawer").classList.remove("show");
+  $("sessionDrawer").setAttribute("aria-hidden", "true");
 }
 
 function filteredSessions(repoPath) {
@@ -1942,16 +1957,20 @@ function renderRepoList() {
     }
 
     any = true;
-    const section = document.createElement("div");
-    section.className = "repo-section";
-    const head = document.createElement("div");
-    head.className = "repo-head";
-    head.textContent = label;
-    head.title = path;
-    section.appendChild(head);
-    renderRepoSessions(section, path);
-    list.appendChild(section);
+    const count = sessions.length;
+    const countHtml = count ? `<span class="repo-count">${count}</span>` : "";
+    const row = document.createElement("div");
+    row.className = "repo-row";
+    row.innerHTML =
+      `<span class="repo-name">${escapeHtml(label)}</span>` +
+      countHtml +
+      `<span class="repo-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+    row.title = path;
+    row.addEventListener("click", () => openSessionDrawer(path));
+    list.appendChild(row);
   }
+
+  if (state.sessionDrawerRepo) renderSessionDrawerBody(state.sessionDrawerRepo);
 
   if (!any && q) {
     const hint = document.createElement("div");
@@ -2072,6 +2091,7 @@ function showWorkspaces() {
   state.view = "workspaces";
   document.body.classList.remove("mode-chat");
   document.body.classList.add("mode-workspaces");
+  closeSessionDrawer();
   updateChrome();
   renderRepoList();
 }
@@ -2141,6 +2161,7 @@ function select(id) {
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
+  closeSessionDrawer();
   clearMessages();
   state.turn = null;
   state.loadingHistory = true;
@@ -2211,6 +2232,8 @@ window.addEventListener("popstate", () => {
   }
 });
 $("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddRepo(); });
+$("drawerClose").addEventListener("click", () => { haptic("light"); closeSessionDrawer(); });
+$("drawerMask").addEventListener("click", closeSessionDrawer);
 $("searchBtn").addEventListener("click", () => {
   haptic("light");
   state.searchOpen = !state.searchOpen;
@@ -2423,7 +2446,7 @@ $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
-window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft };
 connect();
 
 function initComposerAntiAutofill() {

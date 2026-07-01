@@ -44,7 +44,7 @@
   <div id="reconnect">Reconnecting…</div>
   <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
 
-  <!-- Repo sections (each repo's sessions listed inline) -->
+  <!-- Repo list (tap a repo to open its session drawer) -->
   <section id="workspaceView">
     <div id="pullRefresh" class="hidden" aria-hidden="true"><span class="pull-spin"></span><span class="pull-label">Release to refresh</span></div>
     <div id="workspaceList"></div>
@@ -98,6 +98,17 @@
   </div>
 
   <div id="localMenu" class="model-menu"></div>
+
+  <div id="drawerMask"></div>
+  <aside id="sessionDrawer" aria-hidden="true">
+    <header id="drawerHead">
+      <button id="drawerClose" class="iconbtn iconbtn-glass" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <h2 id="drawerTitle"></h2>
+    </header>
+    <div id="drawerBody"></div>
+  </aside>
 
   <div id="sheetMask"></div>
   <div id="bottomSheet">
