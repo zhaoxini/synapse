@@ -65,17 +65,15 @@ async function main() {
     }, WS_PORT);
     await page.reload();
     await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(OUT, "01-workspaces.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "01-repos.png"), fullPage: false });
 
-    await page.locator(".ws-tree-repo").first().click();
-    await page.waitForTimeout(300);
-    await page.screenshot({ path: path.join(OUT, "01-workspaces-drawer.png"), fullPage: false });
-
-    await page.locator("#drawerBody .sess-row").first().click();
+    await page.locator(".repo-section .sess-row").first().click();
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(OUT, "02-chat.png"), fullPage: false });
+
+    await page.locator("#backBtn").click();
     await page.waitForTimeout(400);
-    await page.screenshot({ path: path.join(OUT, "03-tree.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "03-repos.png"), fullPage: false });
 
     console.log(`Screenshots saved to ${OUT}`);
   } finally {

@@ -94,50 +94,40 @@ async function main() {
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
 
     await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
-    ok("Projects view is default");
+    ok("Repos view is default");
 
-    (await page.locator("#pageTitle").textContent()) === "Projects"
-      ? ok("Projects page title") : fail("Projects title missing");
+    (await page.locator("#pageTitle").textContent()) === "Repos"
+      ? ok("Repos page title") : fail("Repos title missing");
 
     !(await page.locator(".ws-row", { hasText: "All Repos" }).count())
       ? ok("No duplicate All Repos node") : fail("All Repos aggregate should be removed");
 
-    (await page.locator(".ws-tree-repo").count()) >= 1
-      ? ok("Project folders rendered") : fail("Project folders missing");
+    (await page.locator(".repo-section").count()) >= 1
+      ? ok("Repo sections rendered") : fail("Repo sections missing");
 
-    await page.locator(".ws-tree-repo").first().click();
-    await page.waitForTimeout(200);
-    (await page.locator("#repoDrawer.show").count()) > 0
-      ? ok("Repo drawer opens on tap") : fail("Repo drawer missing");
+    (await page.locator(".repo-section .sess-row").count()) > 0
+      ? ok("Sessions listed under repos") : fail("Inline repo sessions missing");
 
-    (await page.locator("#drawerBody .sess-row").count()) > 0
-      ? ok("Sessions shown in drawer") : fail("Drawer sessions missing");
-
-    !(await page.locator("#workspaceList .sess-row").count())
-      ? ok("Main list shows repos only") : fail("Sessions should not appear on main list");
+    !(await page.locator(".ws-tree-repo").count())
+      ? ok("No folder rows for repos") : fail("Repos should not render as folder rows");
 
     !(await page.locator("#composer").isVisible())
-      ? ok("Composer hidden on projects list") : fail("Composer should be hidden on projects list");
-
-    await page.locator("#drawerClose").click();
-    await page.waitForTimeout(150);
+      ? ok("Composer hidden on repos list") : fail("Composer should be hidden on repos list");
 
     const sessBefore = await page.evaluate(() => window.__synapse.state.sessions.length);
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("+ stays on projects list") : fail("+ should not leave projects list");
+      ? ok("+ stays on repos list") : fail("+ should not leave repos list");
     (await page.locator("#bottomSheet.show").count()) > 0
-      && (await page.locator("#sheetTitle").textContent()) === "Add project"
-      ? ok("+ opens add project sheet") : fail("+ should open add project sheet");
+      && (await page.locator("#sheetTitle").textContent()) === "Add repo"
+      ? ok("+ opens add repo sheet") : fail("+ should open add repo sheet");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
     await page.locator("#sheetClose").click();
     await page.waitForTimeout(150);
 
-    await page.locator(".ws-tree-repo").first().click();
-    await page.waitForTimeout(150);
-    await page.locator("#drawerBody .tree-new-row").click();
+    await page.locator(".repo-section .tree-new-row").first().click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-chat")))
       ? ok("New session opens draft chat") : fail("New session should open draft chat");
@@ -147,8 +137,6 @@ async function main() {
       ? ok("Synapse logo on empty state") : fail("Logo missing on empty state");
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
-    await page.locator(".ws-tree-repo").first().click();
-    await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.spark").count()) > 0
       ? ok("Working session sparkle icon") : fail("Sparkle icon missing");
@@ -160,7 +148,7 @@ async function main() {
       ? ok("Inline archive button on rows") : fail("Archive button missing");
 
     // chat + skeleton (use idle session)
-    await page.locator("#drawerBody .sess-row").nth(1).click();
+    await page.locator(".repo-section .sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);
@@ -222,7 +210,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Back returns to project tree") : fail("Back did not return to tree");
+      ? ok("Back returns to repos list") : fail("Back did not return to repos list");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");

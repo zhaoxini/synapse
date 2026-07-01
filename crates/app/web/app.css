@@ -99,43 +99,6 @@ textarea { font: inherit; }
 .iconbtn.active { color: var(--accent-text); }
 .iconbtn.active::before { background: var(--accent-bg); }
 
-/* ---------- repo drawer (sessions per project) ---------- */
-#drawerMask {
-  position: fixed; left: 0; right: 0; bottom: 0;
-  top: calc(var(--topbar-h) + var(--safe-top));
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 38; opacity: 0; pointer-events: none; transition: opacity .25s;
-}
-#drawerMask.show { opacity: 1; pointer-events: auto; }
-#repoDrawer {
-  position: fixed; right: 0; bottom: 0; z-index: 39;
-  top: calc(var(--topbar-h) + var(--safe-top));
-  width: min(100%, 420px); max-width: 100%;
-  background: var(--bg);
-  transform: translateX(100%);
-  transition: transform .32s cubic-bezier(.32, .72, 0, 1);
-  display: flex; flex-direction: column;
-  box-shadow: -6px 0 28px rgba(0, 0, 0, 0.12);
-}
-#repoDrawer.show { transform: translateX(0); }
-#drawerHead {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
-  min-height: var(--topbar-h); padding: 0 8px 0 4px;
-  border-bottom: 1px solid var(--border-light);
-}
-#drawerClose { flex: 0 0 44px; }
-#drawerTitle {
-  flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-#drawerBody {
-  flex: 1 1 0; overflow-y: auto;
-  padding-bottom: calc(8px + var(--safe-bottom));
-}
-#drawerBody .tree-new-row { padding-left: 16px; }
-#drawerBody .sess-row { padding-left: 16px; }
-#drawerBody .empty-hint { padding: 24px 16px; }
-
 /* ---------- page title (large, below topbar) ---------- */
 .chat-title {
   position: absolute; left: 16px; right: 16px;
@@ -235,30 +198,15 @@ body.mode-chat #pageHead { display: none; }
   position: relative;
 }
 
-/* workspace rows */
-.ws-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 16px; cursor: pointer;
-  border-bottom: 1px solid var(--border-light);
-  transition: background .12s;
-}
-.ws-row:active { background: var(--btn-secondary); }
-.ws-icon {
-  width: 28px; height: 28px; flex: 0 0 28px;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--ink-2);
-}
-.ws-label {
-  flex: 1; min-width: 0; font-size: 17px; color: var(--ink);
+/* repo sections — repo name + its sessions (no folder row) */
+.repo-section { padding-bottom: 4px; }
+.repo-section + .repo-section { border-top: 8px solid var(--elevated); }
+.repo-head {
+  padding: 18px 16px 4px; font-size: 22px; font-weight: 700;
+  letter-spacing: -0.02em; color: var(--ink); line-height: 1.15;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ws-count {
-  flex: 0 0 auto; min-width: 22px; height: 22px; padding: 0 7px;
-  border-radius: 11px; background: var(--btn-secondary);
-  color: var(--ink-2); font-size: 13px; font-weight: 500;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.ws-chev { color: var(--ink-3); flex: 0 0 auto; }
+.repo-section .tree-new-row { padding-left: 16px; }
 
 .tree-new-row {
   display: flex; align-items: center; gap: 12px;
