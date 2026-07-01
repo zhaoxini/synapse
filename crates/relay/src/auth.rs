@@ -58,3 +58,10 @@ pub fn new_pairing_code() -> String {
     let mut rng = rand::thread_rng();
     format!("{:06}", rng.gen_range(0..1_000_000))
 }
+
+pub fn new_verification_code() -> String {
+    new_pairing_code()
+}
+
+pub const EMAIL_CODE_SECS: i64 = 900;
+pub const SESSION_DAYS: i64 = 30;

@@ -13,6 +13,12 @@ pub struct AppConfig {
     pub relay_tls: bool,
     pub session_token: String,
     pub user_email: String,
+    #[serde(default = "default_verified")]
+    pub email_verified: bool,
+}
+
+fn default_verified() -> bool {
+    true
 }
 
 impl AppConfig {
@@ -41,6 +47,13 @@ impl AppConfig {
     }
 
     pub fn clear() -> Result<()> {
+        if let Ok(Some(cfg)) = Self::load() {
+            let client = reqwest::Client::new();
+            let _ = client
+                .post(format!("{}/api/v1/auth/logout", cfg.relay_api))
+                .header("Authorization", format!("Bearer {}", cfg.session_token))
+                .send();
+        }
         let path = Self::path();
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -99,6 +112,8 @@ struct AuthBody<'a> {
 #[derive(Deserialize)]
 struct AuthResp {
     session_token: String,
+    #[serde(default)]
+    email_verified: bool,
     user: UserResp,
     relay_host: String,
     relay_port: u16,
@@ -108,6 +123,8 @@ struct AuthResp {
 #[derive(Deserialize)]
 struct UserResp {
     email: String,
+    #[serde(default)]
+    email_verified: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,6 +156,24 @@ impl AccountClient {
         }
     }
 
+    fn cfg_from_auth(
+        api: String,
+        ws: String,
+        auth: AuthResp,
+    ) -> AppConfig {
+        let verified = auth.email_verified || auth.user.email_verified;
+        AppConfig {
+            relay_api: api,
+            relay_ws: ws,
+            relay_host: auth.relay_host,
+            relay_port: auth.relay_port,
+            relay_tls: auth.relay_tls,
+            session_token: auth.session_token,
+            user_email: auth.user.email,
+            email_verified: verified,
+        }
+    }
+
     pub async fn register(relay: &str, email: &str, password: &str, name: &str) -> Result<Self> {
         let (api, ws, _host, _port, _tls) = relay_urls(relay)?;
         let auth: AuthResp = reqwest::Client::new()
@@ -154,16 +189,7 @@ impl AccountClient {
             .context("register failed")?
             .json()
             .await?;
-        let cfg = AppConfig {
-            relay_api: api,
-            relay_ws: ws,
-            relay_host: auth.relay_host,
-            relay_port: auth.relay_port,
-            relay_tls: auth.relay_tls,
-            session_token: auth.session_token,
-            user_email: auth.user.email,
-        };
-        Ok(Self::from_config(cfg))
+        Ok(Self::from_config(Self::cfg_from_auth(api, ws, auth)))
     }
 
     pub async fn login(relay: &str, email: &str, password: &str) -> Result<Self> {
@@ -181,16 +207,77 @@ impl AccountClient {
             .context("login failed")?
             .json()
             .await?;
-        let cfg = AppConfig {
-            relay_api: api,
-            relay_ws: ws,
-            relay_host: auth.relay_host,
-            relay_port: auth.relay_port,
-            relay_tls: auth.relay_tls,
-            session_token: auth.session_token,
-            user_email: auth.user.email,
-        };
-        Ok(Self::from_config(cfg))
+        Ok(Self::from_config(Self::cfg_from_auth(api, ws, auth)))
+    }
+
+    pub async fn verify_email(&self, code: &str) -> Result<()> {
+        self.client
+            .post(format!("{}/api/v1/auth/verify-email", self.cfg.relay_api))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.cfg.session_token),
+            )
+            .json(&serde_json::json!({ "code": code.trim() }))
+            .send()
+            .await?
+            .error_for_status()
+            .context("verify email failed")?;
+        Ok(())
+    }
+
+    pub async fn resend_verification(&self) -> Result<()> {
+        self.client
+            .post(format!(
+                "{}/api/v1/auth/resend-verification",
+                self.cfg.relay_api
+            ))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.cfg.session_token),
+            )
+            .send()
+            .await?
+            .error_for_status()
+            .context("resend verification failed")?;
+        Ok(())
+    }
+
+    pub async fn forgot_password(relay: &str, email: &str) -> Result<()> {
+        let (api, _ws, _host, _port, _tls) = relay_urls(relay)?;
+        reqwest::Client::new()
+            .post(format!("{api}/api/v1/auth/forgot-password"))
+            .json(&serde_json::json!({ "email": email.trim().to_lowercase() }))
+            .send()
+            .await?
+            .error_for_status()
+            .context("forgot password failed")?;
+        Ok(())
+    }
+
+    pub async fn reset_password(
+        relay: &str,
+        email: &str,
+        code: &str,
+        password: &str,
+    ) -> Result<()> {
+        let (api, _ws, _host, _port, _tls) = relay_urls(relay)?;
+        reqwest::Client::new()
+            .post(format!("{api}/api/v1/auth/reset-password"))
+            .json(&serde_json::json!({
+                "email": email.trim().to_lowercase(),
+                "code": code.trim(),
+                "password": password,
+            }))
+            .send()
+            .await?
+            .error_for_status()
+            .context("reset password failed")?;
+        Ok(())
+    }
+
+    pub fn google_oauth_url(relay: &str) -> Result<String> {
+        let (api, _ws, _host, _port, _tls) = relay_urls(relay)?;
+        Ok(format!("{api}/api/v1/auth/oauth/google"))
     }
 
     pub async fn list_devices(&self) -> Result<Vec<DeviceListItem>> {

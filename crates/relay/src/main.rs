@@ -8,7 +8,9 @@
 mod api;
 mod auth;
 mod db;
+mod email;
 mod registry;
+mod sso;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -21,10 +23,12 @@ use axum::{
 };
 use clap::Parser;
 use db::Db;
+use email::EmailConfig;
 use futures_util::{SinkExt, StreamExt};
 use registry::Registry;
 use serde::Deserialize;
 use serde_json::json;
+use sso::OAuthConfig;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
@@ -66,6 +70,9 @@ pub struct AppState {
     pub public_host: String,
     pub public_port: u16,
     pub tls: bool,
+    pub email: Option<EmailConfig>,
+    pub oauth: Option<OAuthConfig>,
+    pub dev: bool,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +110,9 @@ async fn main() -> Result<()> {
         public_host: public_host.clone(),
         public_port,
         tls: public_tls,
+        email: EmailConfig::from_env(),
+        oauth: OAuthConfig::from_env(&public_host, public_tls),
+        dev: args.dev,
     };
 
     let app = api::router()
