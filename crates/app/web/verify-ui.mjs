@@ -105,24 +105,39 @@ async function main() {
     (await page.locator(".ws-tree-repo").count()) >= 1
       ? ok("Project folders rendered") : fail("Project folders missing");
 
-    (await page.locator(".ws-tree-children .sess-row").count()) > 0
-      ? ok("Sessions nested under projects") : fail("Tree sessions missing");
+    await page.locator(".ws-tree-repo").first().click();
+    await page.waitForTimeout(200);
+    (await page.locator("#repoDrawer.show").count()) > 0
+      ? ok("Repo drawer opens on tap") : fail("Repo drawer missing");
+
+    (await page.locator("#drawerBody .sess-row").count()) > 0
+      ? ok("Sessions shown in drawer") : fail("Drawer sessions missing");
+
+    !(await page.locator("#workspaceList .sess-row").count())
+      ? ok("Main list shows repos only") : fail("Sessions should not appear on main list");
 
     !(await page.locator("#composer").isVisible())
       ? ok("Composer hidden on projects list") : fail("Composer should be hidden on projects list");
+
+    await page.locator("#drawerClose").click();
+    await page.waitForTimeout(150);
 
     const sessBefore = await page.evaluate(() => window.__synapse.state.sessions.length);
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
       ? ok("+ stays on projects list") : fail("+ should not leave projects list");
-    (await page.locator("#localMenu.show").count()) > 0
-      ? ok("+ opens add project menu") : fail("+ should open add project menu");
+    (await page.locator("#bottomSheet.show").count()) > 0
+      && (await page.locator("#sheetTitle").textContent()) === "Add project"
+      ? ok("+ opens add project sheet") : fail("+ should open add project sheet");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
-    await page.evaluate(() => document.getElementById("localMenu").classList.remove("show"));
+    await page.locator("#sheetClose").click();
+    await page.waitForTimeout(150);
 
-    await page.locator(".tree-new-row").first().click();
+    await page.locator(".ws-tree-repo").first().click();
+    await page.waitForTimeout(150);
+    await page.locator("#drawerBody .tree-new-row").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-chat")))
       ? ok("New session opens draft chat") : fail("New session should open draft chat");
@@ -132,6 +147,8 @@ async function main() {
       ? ok("Synapse logo on empty state") : fail("Logo missing on empty state");
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
+    await page.locator(".ws-tree-repo").first().click();
+    await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.spark").count()) > 0
       ? ok("Working session sparkle icon") : fail("Sparkle icon missing");
@@ -143,7 +160,7 @@ async function main() {
       ? ok("Inline archive button on rows") : fail("Archive button missing");
 
     // chat + skeleton (use idle session)
-    await page.locator(".ws-tree-children .sess-row").nth(1).click();
+    await page.locator("#drawerBody .sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);

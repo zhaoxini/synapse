@@ -67,11 +67,13 @@ async function main() {
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT, "01-workspaces.png"), fullPage: false });
 
-    await page.locator(".ws-tree-children .sess-row").first().click();
+    await page.locator(".ws-tree-repo").first().click();
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(OUT, "01-workspaces-drawer.png"), fullPage: false });
+
+    await page.locator("#drawerBody .sess-row").first().click();
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(OUT, "02-chat.png"), fullPage: false });
-
-    await page.locator("#backBtn").click();
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(OUT, "03-tree.png"), fullPage: false });
 

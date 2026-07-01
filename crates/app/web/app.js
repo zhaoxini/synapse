@@ -30,7 +30,7 @@ const state = {
   connected: false,
   busy: false,
   view: "workspaces", // "workspaces" | "chat"
-  expandedProjects: new Set(),
+  drawerRepo: null,    // project path when session drawer is open
   searchOpen: false,
   searchQuery: "",
   creating: false,
@@ -1821,23 +1821,60 @@ function projectPaths() {
   });
 }
 
-function ensureProjectsVisible() {
-  if (state.activeId) {
-    const s = state.sessions.find(x => x.id === state.activeId);
-    if (s?.cwd) state.expandedProjects.add(normalizePath(s.cwd));
-  }
-  if (!state.expandedProjects.size) {
-    for (const p of projectPaths()) {
-      if (filteredSessions(p).length) state.expandedProjects.add(p);
-    }
-  }
+function openRepoDrawer(path) {
+  const norm = normalizePath(path);
+  if (!norm) return;
+  state.drawerRepo = norm;
+  $("drawerTitle").textContent = basename(norm);
+  renderDrawerSessions(norm);
+  $("drawerMask").classList.add("show");
+  $("repoDrawer").classList.add("show");
+  $("repoDrawer").setAttribute("aria-hidden", "false");
+  haptic("light");
 }
 
-function toggleProject(key) {
-  if (state.expandedProjects.has(key)) state.expandedProjects.delete(key);
-  else state.expandedProjects.add(key);
-  renderProjectTree();
-  haptic("light");
+function closeRepoDrawer() {
+  state.drawerRepo = null;
+  $("drawerMask").classList.remove("show");
+  $("repoDrawer").classList.remove("show");
+  $("repoDrawer").setAttribute("aria-hidden", "true");
+}
+
+function renderDrawerSessions(path) {
+  const body = $("drawerBody");
+  if (!body || normalizePath(state.drawerRepo) !== normalizePath(path)) return;
+  body.innerHTML = "";
+
+  const newRow = document.createElement("div");
+  newRow.className = "tree-new-row";
+  newRow.textContent = "+ New session";
+  newRow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeRepoDrawer();
+    startNewDraft(path);
+  });
+  body.appendChild(newRow);
+
+  const pending = normalizePath(state.pendingCwd);
+  if (state.creating && pending === normalizePath(path)) {
+    const row = document.createElement("div");
+    row.className = "sess-row creating";
+    row.innerHTML =
+      sessionIconHtml({ state: "busy" }) +
+      `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
+      `<div class="sess-sub working">Working</div></div>`;
+    body.appendChild(row);
+  }
+
+  const sessions = filteredSessions(path);
+  if (!sessions.length && !state.creating) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = "No sessions yet";
+    body.appendChild(hint);
+  } else {
+    for (const s of sessions) appendSessionRow(body, s);
+  }
 }
 
 function filteredSessions(projectPath) {
@@ -1898,7 +1935,6 @@ function appendSessionRow(parent, s) {
 }
 
 function renderProjectTree() {
-  ensureProjectsVisible();
   const list = $("workspaceList");
   if (!list) return;
   list.innerHTML = "";
@@ -1926,67 +1962,100 @@ function renderProjectTree() {
       const labelMatch = label.toLowerCase().includes(q);
       const sessionMatch = sessions.length > 0;
       if (!labelMatch && !sessionMatch) continue;
-      if (sessionMatch || labelMatch) state.expandedProjects.add(path);
     }
 
-    const expanded = state.expandedProjects.has(path);
-    const row = document.createElement("div");
-    row.className = "ws-row ws-tree-repo" + (expanded ? " expanded" : "");
     const count = sessions.length;
     const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
+    const row = document.createElement("div");
+    row.className = "ws-row ws-tree-repo";
     row.innerHTML =
       `<span class="ws-icon">${FOLDER_SVG}</span>` +
       `<span class="ws-label">${escapeHtml(label)}</span>` +
       countHtml +
       `<span class="ws-chev"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
-    row.addEventListener("click", () => toggleProject(path));
+    row.addEventListener("click", () => openRepoDrawer(path));
     list.appendChild(row);
-
-    if (!expanded) continue;
-
-    const children = document.createElement("div");
-    children.className = "ws-tree-children";
-
-    const newRow = document.createElement("div");
-    newRow.className = "tree-new-row";
-    newRow.textContent = "+ New session";
-    newRow.addEventListener("click", (e) => {
-      e.stopPropagation();
-      startNewDraft(path);
-    });
-    children.appendChild(newRow);
-
-    const pending = normalizePath(state.pendingCwd);
-    if (state.creating && pending === path) {
-      const row = document.createElement("div");
-      row.className = "sess-row creating";
-      row.innerHTML =
-        sessionIconHtml({ state: "busy" }) +
-        `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
-        `<div class="sess-sub working">Working</div></div>`;
-      children.appendChild(row);
-    }
-
-    if (!sessions.length && !state.creating) {
-      const hint = document.createElement("div");
-      hint.className = "empty-hint";
-      hint.textContent = "No sessions yet";
-      children.appendChild(hint);
-    } else {
-      for (const s of sessions) appendSessionRow(children, s);
-    }
-
-    list.appendChild(children);
   }
+
+  if (state.drawerRepo) renderDrawerSessions(state.drawerRepo);
+}
+
+function openProjectPickerSheet(onPick) {
+  closeMenus();
+  const pick = onPick || ((path) => chooseCwd(path));
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+
+  const pathWrap = document.createElement("div");
+  pathWrap.className = "model-search-wrap";
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.className = "model-search";
+  inp.placeholder = "Project path, e.g. ~/code/foo";
+  inp.style.paddingLeft = "12px";
+  inp.autocomplete = "off";
+  pathWrap.appendChild(inp);
+  wrap.appendChild(pathWrap);
+
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+
+  const addSection = (title) => {
+    const h = document.createElement("div");
+    h.className = "model-section";
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
+  const render = (query) => {
+    list.innerHTML = "";
+    const q = (query || "").trim().toLowerCase();
+    const repos = (state.cwds || []).filter((p) => {
+      const b = basename(p).toLowerCase();
+      return !q || b.includes(q) || String(p).toLowerCase().includes(q);
+    });
+    if (repos.length) {
+      addSection("Repositories");
+      for (const p of repos) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "model-row";
+        row.innerHTML = `<span class="model-row-label">${escapeHtml(basename(p))}</span>`;
+        row.title = p;
+        row.addEventListener("click", () => { closeSheet(); pick(p); });
+        list.appendChild(row);
+      }
+    } else if (q) {
+      addSection("Repositories");
+      const empty = document.createElement("div");
+      empty.className = "model-empty";
+      empty.textContent = "No repositories match your search";
+      list.appendChild(empty);
+    }
+  };
+
+  inp.addEventListener("input", () => render(inp.value));
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const p = inp.value.trim();
+      if (p) { closeSheet(); pick(p); }
+    }
+  });
+  render("");
+  wrap.appendChild(list);
+
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Add project", wrap);
+  requestAnimationFrame(() => inp.focus());
 }
 
 function openAddProject() {
-  openLocalMenu((path) => {
+  openProjectPickerSheet((path) => {
     const norm = normalizePath(path);
     state.pendingCwd = norm;
-    state.expandedProjects.add(norm);
     send({ op: "register_project", path: norm });
     renderProjectTree();
+    openRepoDrawer(norm);
   });
 }
 
@@ -2023,7 +2092,7 @@ function showWorkspaces() {
   state.view = "workspaces";
   document.body.classList.remove("mode-chat");
   document.body.classList.add("mode-workspaces");
-  ensureProjectsVisible();
+  closeRepoDrawer();
   updateChrome();
   renderProjectTree();
 }
@@ -2093,6 +2162,7 @@ function select(id) {
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
+  closeRepoDrawer();
   clearMessages();
   state.turn = null;
   state.loadingHistory = true;
@@ -2162,8 +2232,9 @@ window.addEventListener("popstate", () => {
     navFromPop = false;
   }
 });
-$("workspaceAvatar").addEventListener("click", () => { haptic("light"); showWorkspaces(); });
 $("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddProject(); });
+$("drawerClose").addEventListener("click", () => { haptic("light"); closeRepoDrawer(); });
+$("drawerMask").addEventListener("click", closeRepoDrawer);
 $("searchBtn").addEventListener("click", () => {
   haptic("light");
   state.searchOpen = !state.searchOpen;

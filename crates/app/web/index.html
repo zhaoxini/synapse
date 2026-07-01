@@ -16,9 +16,6 @@
       <button id="backBtn" class="iconbtn iconbtn-filled" aria-label="Back" hidden>
         <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
-      <button id="workspaceAvatar" class="avatar-btn" aria-label="Projects">
-        <img src="logo.svg" width="32" height="32" alt="" />
-      </button>
     </div>
     <div id="chatTitle" class="chat-title" hidden>Chat</div>
     <div class="topbar-right">
@@ -101,6 +98,17 @@
   </div>
 
   <div id="localMenu" class="model-menu"></div>
+
+  <div id="drawerMask"></div>
+  <aside id="repoDrawer" aria-hidden="true">
+    <header id="drawerHead">
+      <button id="drawerClose" class="iconbtn" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+      <h2 id="drawerTitle"></h2>
+    </header>
+    <div id="drawerBody"></div>
+  </aside>
 
   <div id="sheetMask"></div>
   <div id="bottomSheet">
