@@ -33,7 +33,7 @@ function startMockWs() {
         sessions,
         models: [{ id: "sonnet", label: "Sonnet" }],
         defaultModel: "sonnet",
-        cwds: ["/workspace/synapse", "/workspace/other"],
+        cwds: ["/workspace/synapse", "/Users/zhaoxin/synapse"],
       }));
       ws.on("message", (raw) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }

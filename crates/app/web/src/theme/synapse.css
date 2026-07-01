@@ -668,19 +668,144 @@ body.mode-native-shell #chatView {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
   transition: border-color .15s, box-shadow .15s;
 }
+/* ---------- Workspaces home (Cursor mobile reference) ---------- */
+body.mode-workspaces {
+  background: #ffffff;
+}
+body.mode-workspaces ion-app.synapse-app {
+  --ion-background-color: #ffffff;
+  background: #ffffff !important;
+}
+body.mode-workspaces #appHeader {
+  background: #ffffff;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: none;
+  padding-top: max(8px, var(--safe-top));
+}
+body.mode-workspaces .ws-toolbar {
+  padding: 2px 16px 0;
+  min-height: 40px;
+  align-items: center;
+}
+body.mode-workspaces #pageHead {
+  padding: 2px 16px 0;
+  min-height: auto;
+}
+body.mode-workspaces #pageTitle {
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  padding-bottom: 4px;
+}
+body.mode-workspaces .profile-btn {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+body.mode-workspaces .profile-btn img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: block;
+}
+body.mode-workspaces .iconbtn-glass {
+  width: 34px;
+  height: 34px;
+  background: rgba(120, 120, 128, 0.12);
+  box-shadow: none;
+  color: var(--ink);
+}
+body.mode-workspaces .ws-toolbar-actions {
+  gap: 8px;
+}
+body.mode-workspaces #workspaceView {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #ffffff;
+}
+body.mode-workspaces #workspaceList {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0;
+}
+body.mode-workspaces .ws-row {
+  padding: 15px 16px;
+  gap: 14px;
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+body.mode-workspaces .ws-row:first-child {
+  border-top: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+body.mode-workspaces .ws-icon {
+  color: rgba(60, 60, 67, 0.55);
+  flex: 0 0 22px;
+}
+body.mode-workspaces .ws-name {
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+body.mode-workspaces .ws-chev {
+  color: rgba(60, 60, 67, 0.35);
+  margin-left: auto;
+}
+body.mode-workspaces .ws-chev svg {
+  width: 13px;
+  height: 13px;
+}
+body.mode-workspaces #composer {
+  background: #ffffff;
+  padding: 10px 16px;
+  padding-bottom: calc(12px + var(--safe-bottom));
+  margin-top: auto;
+}
 body.mode-workspaces #composerRow {
   flex-direction: row;
   align-items: center;
-  padding: 8px 10px;
-  border-radius: 24px;
+  gap: 0;
+  background: #f2f2f7;
+  border: none;
+  border-radius: 26px;
+  box-shadow: none;
+  padding: 6px 8px 6px 6px;
+  min-height: 48px;
+}
+body.mode-workspaces #composerRow:focus-within {
+  border: none;
+  box-shadow: none;
 }
 body.mode-workspaces .composer-field {
   align-items: center;
+  gap: 6px;
+  flex: 1;
 }
-body.mode-workspaces #composerControls { display: none; }
-body.mode-workspaces #micBtn { display: inline-flex; }
+body.mode-workspaces #input {
+  font-size: 17px;
+  padding: 10px 4px;
+  line-height: 1.2;
+  min-height: 24px;
+}
+body.mode-workspaces #input::placeholder {
+  color: rgba(60, 60, 67, 0.45);
+}
+body.mode-workspaces .dock-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  flex: 0 0 34px;
+  background: rgba(120, 120, 128, 0.14);
+  color: rgba(60, 60, 67, 0.75);
+}
+body.mode-workspaces #composerControls {
+  display: none;
+}
 body.mode-chat #micBtn { display: none; }
 #micBtn { display: none; }
+}
 #composerRow:focus-within {
   border-color: var(--border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);

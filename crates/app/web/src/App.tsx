@@ -121,7 +121,7 @@ export default function App() {
               <textarea
                 id="input"
                 rows={1}
-                placeholder="Plan, ask, build…"
+                  placeholder="Plan, ask, build..."
                 autoComplete="off"
                 autoCorrect="on"
                 autoCapitalize="sentences"
