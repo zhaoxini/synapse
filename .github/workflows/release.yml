@@ -128,10 +128,11 @@ jobs:
       - name: List artifacts
         run: find dist -type f | sort
 
-      - name: Attach install script
+      - name: Attach install scripts
         run: |
           cp scripts/install.sh dist/install.sh
-          chmod +x dist/install.sh
+          cp scripts/install-relay.sh dist/install-relay.sh
+          chmod +x dist/install.sh dist/install-relay.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

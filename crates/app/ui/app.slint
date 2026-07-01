@@ -82,7 +82,7 @@ export component App inherits Window {
 
     in-out property <string> view: "pairing";
     in-out property <string> pairingSubView: "auth";
-    in-out property <string> relayUrl: "http://127.0.0.1:8080";
+    in-out property <string> relayUrl: "https://zx0623.duckdns.org";
     in-out property <string> authEmail: "";
     in-out property <string> authPassword: "";
     in-out property <string> authName: "";
@@ -179,7 +179,7 @@ export component App inherits Window {
                     font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
                 }
                 authFieldRect {
-                    placeholder: "https://relay.example.com";
+                    placeholder: "https://zx0623.duckdns.org";
                     value: root.relayUrl;
                     edited => { root.relayUrl = self.value; }
                 }

@@ -59,7 +59,16 @@ Saved to `~/.synapse/config.json` after first sign-in.
 This package also includes `bin/synapse-relay` — deploy on your VPS:
 
 ```sh
-./bin/synapse-relay --port 443 --tls-cert fullchain.pem --tls-key privkey.pem --public-host relay.example.com
+# One-line install on a Linux VPS (TLS via Let's Encrypt)
+curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install-relay.sh | sudo bash
 ```
 
-Set the repository variable `SYNAPSE_RELAY=wss://relay.example.com` when building release binaries so users never configure the relay URL themselves.
+Default relay domain: `wss://zx0623.duckdns.org` (baked into release `synapse-server` builds).
+
+Manual setup:
+
+```sh
+./bin/synapse-relay --port 443 --tls-cert fullchain.pem --tls-key privkey.pem --public-host zx0623.duckdns.org
+```
+
+Set the repository variable `SYNAPSE_RELAY=wss://relay.example.com` when building release binaries to override the default relay URL.

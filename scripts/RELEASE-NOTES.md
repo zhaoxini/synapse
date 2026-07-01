@@ -32,6 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/ins
 brew tap zhaoxini/synapse https://github.com/zhaoxini/synapse
 brew install synapse-server
 
+# Default relay: wss://zx0623.duckdns.org (no manual config needed)
+
 # Then run
 synapse-server
 ```
