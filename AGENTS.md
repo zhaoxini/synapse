@@ -78,3 +78,37 @@ cargo build                                   # or --release
 # phone:  cloudflared tunnel --url http://127.0.0.1:4173  AND  --url http://127.0.0.1:8765
 #         then https://<web-host>/?host=<server-host>&port=443&token=CODE&tls=1
 ```
+
+### Auto pull + redeploy on this cloud VM
+
+Run the watcher (pulls `origin/master` every 30s, rebuilds/restarts on new commits):
+
+```sh
+chmod +x scripts/cloud-dev-watch.sh
+./scripts/cloud-dev-watch.sh              # deploy now + watch forever
+./scripts/cloud-dev-watch.sh --once       # deploy once only
+```
+
+What it does each deploy:
+- `cargo build -p synapse-server` (and `-p synapse-app` if app paths changed)
+- restarts `synapse-server` on `:4173`
+- serves **web from disk** on `:8770` (`python3 -m http.server crates/app/web`) so UI file changes from `git pull` show on browser refresh without rebuilding `synapse-web`
+- restarts two `cloudflared` quick tunnels and writes the phone URL to `/tmp/synapse-public-url.txt`
+
+Logs: `/tmp/synapse-deploy.log`. Env overrides: `SYNAPSE_GIT_BRANCH`, `SYNAPSE_POLL_SECS`, `SYNAPSE_TOKEN`, `CLAUDE_BIN`.
+
+Keep it running in tmux: `tmux new -d -s synapse-watch './scripts/cloud-dev-watch.sh'`.
+
+### Fixed domain on your own VPS (RackNerd + DuckDNS, no Cloudflare)
+
+For a **stable** phone URL, deploy the full stack on a VPS with a domain (e.g. `zx0623.duckdns.org`). One domain serves web + WebSocket via Caddy (`deploy/docker-compose.yml`).
+
+On the VPS (SSH as root, after `git clone`):
+
+```sh
+export DEEPSEEK_API_KEY='sk-...'
+export SYNAPSE_DOMAIN='zx0623.duckdns.org'
+bash scripts/bootstrap-vps.sh
+```
+
+Phone URL (fixed): `https://<domain>/?host=<domain>&port=443&token=CODE&tls=1`. Open ports 80/443 on the VPS firewall. The Cursor cloud VM may not be able to SSH into your VPS (fail2ban / password); run the bootstrap **on the VPS** or add the VM's SSH public key to `/root/.ssh/authorized_keys`.

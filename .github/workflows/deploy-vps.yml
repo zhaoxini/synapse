@@ -1,0 +1,70 @@
+# Deploy synapse-server binary + web UI to VPS (systemd + nginx layout).
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   VPS_SSH_HOST          e.g. 192.3.179.202
+#   VPS_SSH_USER          e.g. root
+#   VPS_SSH_PRIVATE_KEY   PEM private key authorized on the VPS
+#
+# Optional variables:
+#   VPS_DOMAIN            e.g. zx0623.duckdns.org (informational)
+name: Deploy VPS (systemd)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - "crates/server/**"
+      - "crates/app/web/**"
+      - "deploy/nginx-vps-synapse.conf"
+      - ".github/workflows/deploy-vps.yml"
+
+jobs:
+  deploy:
+    name: Build and rsync to VPS
+    runs-on: ubuntu-latest
+    if: ${{ secrets.VPS_SSH_HOST != '' && secrets.VPS_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps (Slint not needed for server-only)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev
+
+      - name: cargo build synapse-server
+        run: cargo build --release -p synapse-server
+
+      - name: Setup SSH
+        env:
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/vps_key
+          chmod 600 ~/.ssh/vps_key
+          ssh-keyscan -H "$VPS_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Upload binary + web + nginx
+        env:
+          VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER || 'root' }}
+        run: |
+          RS="ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new"
+          scp -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
+            target/release/synapse-server "${VPS_SSH_USER}@${VPS_SSH_HOST}:/usr/local/bin/synapse-server"
+          $RS "${VPS_SSH_USER}@${VPS_SSH_HOST}" 'mkdir -p /var/www/synapse /opt/synapse'
+          scp -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new -r \
+            crates/app/web/* "${VPS_SSH_USER}@${VPS_SSH_HOST}:/var/www/synapse/"
+          scp -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
+            deploy/nginx-vps-synapse.conf "${VPS_SSH_USER}@${VPS_SSH_HOST}:/etc/nginx/sites-available/synapse"
+
+      - name: Restart services
+        env:
+          VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER || 'root' }}
+        run: |
+          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
+            "${VPS_SSH_USER}@${VPS_SSH_HOST}" \
+            'chmod +x /usr/local/bin/synapse-server && nginx -t && systemctl reload nginx && systemctl restart synapse-server && curl -sf http://127.0.0.1:4173/api/health'

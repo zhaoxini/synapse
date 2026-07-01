@@ -1,0 +1,24 @@
+# VPS overlay: mount host Claude CLI + DeepSeek config into synapse-server.
+# Use with: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.vps.yml up -d --build
+
+services:
+  synapse:
+    command:
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "4173"
+      - --token
+      - "${SYNAPSE_TOKEN:-CODE}"
+      - --cwd
+      - "${SYNAPSE_CWD:-/workspace}"
+      - --bin
+      - /usr/local/bin/claude
+    volumes:
+      - "${SYNAPSE_CWD:-.}:/workspace"
+      - "${HOME:-/root}/.claude:/root/.claude:ro"
+      - "${CLAUDE_BIN_HOST:-/root/.npm-global/bin/claude}:/usr/local/bin/claude:ro"
+
+  caddy:
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:-}"
