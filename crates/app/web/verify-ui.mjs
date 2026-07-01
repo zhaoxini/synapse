@@ -209,6 +209,20 @@ async function main() {
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");
 
+    // empty transcript keeps the draft empty state (no flash regression)
+    await page.locator(".ws-row", { hasText: "synapse" }).click();
+    await page.waitForTimeout(150);
+    await page.locator(".sess-row").nth(1).click();
+    await page.waitForTimeout(400);
+    const emptyVisible = await page.evaluate(() => !document.getElementById("empty").classList.contains("hidden"));
+    emptyVisible ? ok("Empty state after blank history") : fail("Empty state missing after blank history");
+
+    await page.evaluate(() => {
+      const z = parseInt(getComputedStyle(document.getElementById("newPill")).zIndex, 10);
+      if (!(z >= 10)) throw new Error("low z-index");
+    });
+    ok("New pill has stacking z-index");
+
   } finally {
     await browser.close();
     stopWs();

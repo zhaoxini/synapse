@@ -85,6 +85,10 @@ textarea { font: inherit; }
 .iconbtn:hover { background: var(--btn-secondary-hover); }
 .iconbtn:active { transform: scale(0.94); }
 .iconbtn.active { background: var(--btn-secondary-hover); color: var(--accent-text); }
+.iconbtn:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
 .avatar-btn {
   width: 36px; height: 36px; border-radius: 50%;
   background: transparent; padding: 0; overflow: hidden;
@@ -140,8 +144,10 @@ body.mode-chat #pageHead { display: none; }
   flex: 0 0 auto; height: 0; overflow: hidden; background: var(--accent-bg);
   color: var(--accent-text); font-weight: 550; font-size: 12px;
   display: flex; align-items: center; justify-content: center; transition: height .2s;
+  cursor: pointer; user-select: none;
 }
 #reconnect.show { height: 26px; }
+#reconnect:active { filter: brightness(0.95); }
 #toast {
   flex: 0 0 auto; height: 0; overflow: hidden; background: var(--danger);
   transition: min-height .2s, height .2s; display: flex; align-items: center;
@@ -291,6 +297,7 @@ body.mode-chat #sessionView { display: none; }
 
 /* ---------- messages ---------- */
 #scroller { flex: 1 1 0; overflow-y: auto; overflow-x: hidden; position: relative; background: var(--bg); }
+#chatView:has(#newPill.show) #scroller { scroll-padding-bottom: 52px; }
 #messages { padding: 8px 16px 24px; display: flex; flex-direction: column; max-width: 680px; margin: 0 auto; width: 100%; }
 
 .msg { margin-bottom: 24px; }

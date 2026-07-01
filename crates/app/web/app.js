@@ -204,12 +204,11 @@ function doConnect(first) {
     if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
     hideConnectOverlay();
     $("reconnect").classList.remove("show");
-    showWorkspaces();
-    // prime session list
     send({ op: "list" });
     if (first) {
-      // pick first session after list arrives; nothing else here
-    } else if (state.activeId) {
+      showWorkspaces();
+    } else if (state.activeId && state.view === "chat") {
+      beginHistoryLoad();
       send({ op: "history", sessionId: state.activeId, limit: 400 });
     }
   };
@@ -223,6 +222,7 @@ function doConnect(first) {
       toast("Could not connect — check link and server");
       showConnectOverlay();
     } else {
+      $("reconnect").textContent = "Tap to reconnect";
       $("reconnect").classList.add("show");
       scheduleReconnect(false);
     }
@@ -644,9 +644,15 @@ function renderTurn(settled) {
 
   tn.replyWrap.innerHTML = "";
   if (replyText) {
-    const md = mdEl(replyText);
-    bindMessageActions(md, replyText);
-    tn.replyWrap.appendChild(md);
+    if (!tn.replyMd || tn.replyMdText !== replyText) {
+      tn.replyMd = mdEl(replyText);
+      tn.replyMdText = replyText;
+      bindMessageActions(tn.replyMd, replyText);
+    }
+    tn.replyWrap.appendChild(tn.replyMd);
+  } else {
+    tn.replyMd = null;
+    tn.replyMdText = "";
   }
 }
 
@@ -1354,11 +1360,13 @@ function openAttachMenu() {
     openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
   });
   addRow("Change server…", () => {
-    if (state.ws) { state.ws.close(); state.ws = null; }
-    state.connected = false;
-    clearCreds();
-    window.__SYNAPSE__ = null;
-    showConnectOverlay();
+    confirmActionSheet("Disconnect and return to pairing?", () => {
+      if (state.ws) { state.ws.close(); state.ws = null; }
+      state.connected = false;
+      clearCreds();
+      window.__SYNAPSE__ = null;
+      showConnectOverlay();
+    });
   });
   menu.classList.add("show");
 }
@@ -1402,9 +1410,12 @@ function finalizeStream() {
 // Transcript has no turn_started/stopped markers; a user message starts a new
 // turn, and everything until the next user message is that turn's work + reply.
 function ingestHistory(events) {
-  clearMessages();
+  messagesEl.innerHTML = "";
+  state.blocks = [];
+  permEl = null;
   state.turn = null;
-  let pendingUserTs = 0;  // timestamp of the user msg that opened the next turn
+  emptyEl.classList.add("hidden");
+  let pendingUserTs = 0;
   for (const evt of events) {
     if (evt.type === "user" && evt.message) {
       const txt = contentText(evt.message.content);
@@ -1431,6 +1442,7 @@ function ingestHistory(events) {
     }
   }
   finalizeStream();
+  if (!state.blocks.length) emptyEl.classList.remove("hidden");
 }
 
 // In transcripts, tool_result blocks arrive inside a *user* frame; route them
@@ -1620,9 +1632,19 @@ function beginHistoryLoad() {
   state.blocks = [];
   emptyEl.classList.add("hidden");
   scroller.classList.add("history-loading");
+  clearTimeout(historyLoadTimer);
+  historyLoadTimer = setTimeout(() => {
+    if (!state.loadingHistory) return;
+    endHistoryLoad();
+    if (!state.blocks.length) emptyEl.classList.remove("hidden");
+    toast("Conversation took too long to load");
+  }, 12000);
 }
 
+let historyLoadTimer = 0;
 function endHistoryLoad() {
+  clearTimeout(historyLoadTimer);
+  historyLoadTimer = 0;
   if (!state.loadingHistory && !scroller.classList.contains("history-loading")) return;
   state.loadingHistory = false;
   scroller.classList.remove("history-loading");
@@ -1658,6 +1680,7 @@ scroller.addEventListener("scroll", () => {
   if (pinned) $("newPill").classList.remove("show");
 });
 $("newPill").addEventListener("click", () => {
+  haptic("light");
   pinned = true;
   scrollToBottom();
   $("newPill").classList.remove("show");
@@ -1795,6 +1818,30 @@ function confirmDeleteSheet(s, onDone) {
     if (onDone) onDone();
     haptic("medium");
   });
+  document.body.appendChild(m);
+}
+
+function confirmActionSheet(message, onConfirm) {
+  closeRowMenu();
+  closeMenus();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const add = (label, cls, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi" + (cls ? " " + cls : "");
+    el.textContent = label;
+    el.addEventListener("click", () => { closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  const head = document.createElement("div");
+  head.className = "row-mi";
+  head.style.color = "var(--ink-2)";
+  head.style.fontSize = "13px";
+  head.style.pointerEvents = "none";
+  head.textContent = message;
+  m.appendChild(head);
+  add("Cancel", "", () => {});
+  add("Confirm", "danger", () => { onConfirm(); haptic("medium"); });
   document.body.appendChild(m);
 }
 
@@ -2011,7 +2058,8 @@ function bindLongPress(row, s) {
   let timer = null;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
   row.addEventListener("touchstart", () => {
-    timer = setTimeout(() => { haptic("medium"); showRowContext(s); }, 480);
+    clear();
+    timer = setTimeout(() => { timer = null; haptic("medium"); showRowContext(s); }, 480);
   }, { passive: true });
   row.addEventListener("touchend", clear);
   row.addEventListener("touchmove", clear);
@@ -2201,6 +2249,11 @@ window.addEventListener("popstate", () => {
     navFromPop = false;
   }
 });
+$("reconnect").addEventListener("click", () => {
+  state.backoff = 500;
+  $("reconnect").textContent = "Reconnecting…";
+  doConnect(false);
+});
 $("workspaceAvatar").addEventListener("click", () => { haptic("light"); showWorkspaces(); });
 $("newBtn").addEventListener("click", () => { haptic("light"); startNewDraft(); });
 $("searchBtn").addEventListener("click", () => {
@@ -2213,6 +2266,14 @@ searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
   if (state.view === "workspaces") renderWorkspaces();
   else if (state.view === "sessions") renderSessions();
+});
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    state.searchOpen = false;
+    state.searchQuery = "";
+    updateChrome();
+    searchInput.blur();
+  }
 });
 $("menuBtn").addEventListener("click", () => {
   haptic("light");
@@ -2401,16 +2462,19 @@ $("toastClose").addEventListener("click", () => $("toast").classList.remove("sho
 // =================== clipboard & message actions ===================
 function bindMessageActions(node, text) {
   if (!node || !text) return;
+  if (node.dataset.msgBound === "1") return;
+  node.dataset.msgBound = "1";
   let timer = null;
   const show = () => showMessageContext(text);
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
   const start = () => {
+    clear();
     timer = setTimeout(() => { timer = null; haptic("medium"); show(); }, 480);
   };
-  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
   node.addEventListener("touchstart", start, { passive: true });
-  node.addEventListener("touchend", cancel);
-  node.addEventListener("touchmove", cancel);
-  node.addEventListener("touchcancel", cancel);
+  node.addEventListener("touchend", clear);
+  node.addEventListener("touchmove", clear);
+  node.addEventListener("touchcancel", clear);
   node.addEventListener("contextmenu", (e) => { e.preventDefault(); show(); });
 }
 
