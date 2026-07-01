@@ -787,6 +787,54 @@ body:not(.mode-chat) #input {
   text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px;
 }
 
+/* model picker sheet (Cursor mobile) */
+#bottomSheet.sheet-picker { max-height: 72vh; }
+#bottomSheet.sheet-picker #sheetHead {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+#bottomSheet.sheet-picker #sheetBody {
+  padding: 0 0 calc(12px + var(--safe-bottom));
+  overflow-y: auto;
+}
+.model-sheet { display: flex; flex-direction: column; }
+.model-search-wrap {
+  position: relative;
+  padding: 4px 16px 12px;
+}
+.model-search-ic {
+  position: absolute; left: 28px; top: 50%; transform: translateY(-50%);
+  color: var(--ink-3); pointer-events: none; display: flex;
+}
+.model-search {
+  width: 100%; height: 36px; border: 0; border-radius: 10px;
+  background: var(--btn-secondary); color: var(--ink);
+  padding: 0 12px 0 38px; font-size: 16px; outline: none;
+}
+.model-search::placeholder { color: var(--ink-3); }
+.model-section {
+  padding: 14px 20px 6px; font-size: 13px; color: var(--ink-2);
+}
+.model-section:first-child { padding-top: 4px; }
+.model-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 14px 20px; border: 0; border-bottom: 1px solid var(--border-light);
+  background: var(--panel); text-align: left; font-size: 17px; color: var(--ink);
+  cursor: pointer; transition: background .12s;
+}
+.model-row:active { background: var(--btn-secondary); }
+.model-row-label { flex: 1; min-width: 0; }
+.model-row-check {
+  flex: 0 0 auto; color: var(--accent); font-size: 15px; font-weight: 600;
+}
+.model-row-more {
+  flex: 0 0 auto; color: var(--ink-3); display: flex; align-items: center;
+  padding: 4px; margin: -4px 0;
+}
+.model-empty {
+  padding: 16px 20px; color: var(--ink-3); font-size: 15px;
+}
+
 /* context action sheet (long-press) */
 .ctx-sheet .row-mi { padding: 14px 16px; font-size: 15px; text-align: center; }
 .ctx-sheet .row-menu { min-width: 220px; left: 50% !important; transform: translateX(-50%); bottom: calc(16px + var(--safe-bottom)); top: auto !important; }
