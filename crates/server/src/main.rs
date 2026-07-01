@@ -131,7 +131,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        None | Some(Commands::Run) => run_server(cli.run).await,
+        None | Some(Commands::Run) => {
+            if account::Config::load()?.is_none() {
+                account::interactive_setup().await?;
+            }
+            run_server(cli.run).await
+        }
         Some(Commands::Register {
             relay,
             email,
@@ -197,20 +202,26 @@ async fn run_server(args: RunArgs) -> Result<()> {
     println!("\n  Synapse server is running.\n");
     println!("  Claude binary:  {}", bin.0.display());
     println!("  Working dir:    {}", cwd.display());
-    println!("  Pairing token:  {token}");
-    if args.tls {
-        println!(
-            "  TLS:            enabled ({})",
-            if args.tls_self_signed {
-                "self-signed"
-            } else {
-                "provided cert"
-            }
-        );
-    }
-    println!("\n  Connect your App to: {scheme}://{addr}/?token={token}\n");
 
-    let (pair_host, pair_port, pair_tls) = if args.tunnel {
+    if saved.is_some() {
+        // Account mode — phone connects via relay; keep output minimal.
+        if let Some(cfg) = &saved {
+            println!("  Signed in as:   {}", cfg.user_email);
+            println!("  This machine:   {}", cfg.device_name);
+            if let Ok(code) = account::create_pairing_code(cfg).await {
+                println!("\n  ┌─────────────────────────────────────┐");
+                println!("  │  Pairing code:  {:>6}               │", code.code);
+                println!("  └─────────────────────────────────────┘");
+                println!("\n  Open the Synapse app → sign in with the same account");
+                println!("  → tap this computer, or enter the code above.\n");
+            }
+        }
+    } else {
+        println!("  Pairing token:  {token}");
+        println!("\n  Connect your App to: {scheme}://{addr}/?token={token}\n");
+    }
+
+    let (pair_host, pair_port, pair_tls) = if saved.is_none() && args.tunnel {
         println!("  Starting Cloudflare Tunnel (public wss access)…");
         let local_url = format!("http://localhost:{}", args.port);
         match tunnel::start_quick_tunnel(&local_url).await {
@@ -234,21 +245,18 @@ async fn run_server(args: RunArgs) -> Result<()> {
             if args.tls { 1 } else { 0 },
         )
     };
-    let pair_url = format!("synapse://{pair_host}:{pair_port}?token={token}&tls={pair_tls}");
-    println!("  Pairing URL (LAN): {pair_url}");
-    println!("  Scan this QR for direct LAN pairing:\n");
-    match qr2term::print_qr(&pair_url) {
-        Ok(_) => println!(),
-        Err(e) => tracing::warn!("could not render pairing QR: {e}"),
+    if saved.is_none() {
+        let pair_url = format!("synapse://{pair_host}:{pair_port}?token={token}&tls={pair_tls}");
+        println!("  Pairing URL (LAN): {pair_url}");
+        println!("  Scan this QR for direct LAN pairing:\n");
+        match qr2term::print_qr(&pair_url) {
+            Ok(_) => println!(),
+            Err(e) => tracing::warn!("could not render pairing QR: {e}"),
+        }
     }
 
     if let Some(cfg) = &saved {
-        println!("  Account:        {} ({})", cfg.user_email, cfg.device_name);
-        println!("  Relay device:   {}", cfg.device_id);
-        if let Ok(code) = account::create_pairing_code(cfg).await {
-            println!("  Pairing code:   {}  (enter in app, expires in {}s)", code.code, code.expires_in);
-        }
-        println!("  Or sign in on the app with the same account to see this device in your list.\n");
+        let _ = cfg; // relay uplink below uses saved config
     }
 
     let relay_url = args

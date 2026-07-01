@@ -241,17 +241,49 @@ pub fn default_device_name() -> String {
         .unwrap_or_else(|| "My Computer".to_string())
 }
 
-pub fn read_password(prompt: &str) -> Result<String> {
-    use std::io::{self, Write};
-    print!("{prompt}");
-    io::stdout().flush()?;
-    let mut s = String::new();
-    io::stdin().read_line(&mut s)?;
-    let s = s.trim().to_string();
-    if s.is_empty() {
-        bail!("password required");
+pub fn default_relay_url() -> Option<String> {
+    std::env::var("SYNAPSE_RELAY").ok().filter(|s| !s.trim().is_empty())
+}
+
+/// First-run interactive setup: email + password only. Relay comes from
+/// `SYNAPSE_RELAY` or a one-time prompt. Tries login first, then register.
+pub async fn interactive_setup() -> Result<Config> {
+    println!("\n  Welcome to Synapse — first-time setup\n");
+    let relay = match default_relay_url() {
+        Some(u) => u,
+        None => {
+            let url = read_line("Relay server [wss://relay.example.com]: ")?;
+            if url.is_empty() {
+                bail!("relay URL required (set SYNAPSE_RELAY or enter it now)");
+            }
+            url
+        }
+    };
+    let email = read_line("Email: ")?;
+    if email.is_empty() || !email.contains('@') {
+        bail!("valid email required");
     }
-    Ok(s)
+    let password = read_password("Password: ")?;
+    let device_name = default_device_name();
+    println!("\n  Signing in…\n");
+    match login_account(&relay, &email, &password, &device_name).await {
+        Ok(cfg) => {
+            cfg.save()?;
+            Ok(cfg)
+        }
+        Err(login_err) => {
+            tracing::debug!("login failed: {login_err}; trying register");
+            match register_account(&relay, &email, &password, "", &device_name).await {
+                Ok(cfg) => {
+                    cfg.save()?;
+                    Ok(cfg)
+                }
+                Err(reg_err) => {
+                    bail!("sign-in failed ({login_err}). Could not create account either ({reg_err}).");
+                }
+            }
+        }
+    }
 }
 
 pub fn read_line(prompt: &str) -> Result<String> {
@@ -261,4 +293,12 @@ pub fn read_line(prompt: &str) -> Result<String> {
     let mut s = String::new();
     io::stdin().read_line(&mut s)?;
     Ok(s.trim().to_string())
+}
+
+pub fn read_password(prompt: &str) -> Result<String> {
+    let s = read_line(prompt)?;
+    if s.is_empty() {
+        bail!("password required");
+    }
+    Ok(s)
 }
