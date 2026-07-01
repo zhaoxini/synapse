@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Front-end for installed synapse-server (placed at bin/synapse-server by install.sh).
-# Real binary: synapse-server.real
+# Front-end for installed synapse-server (synapse-server.real).
 #
 #   synapse-server          # start in background (default)
-#   synapse-server start
 #   synapse-server stop
 #   synapse-server pairing-code | status | login | …  → forwarded to .real
 set -euo pipefail
 
-REAL="$(cd "$(dirname "$0")" && pwd)/synapse-server.real"
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL="${BIN_DIR}/synapse-server.real"
 [[ -x "$REAL" ]] || REAL="$(command -v synapse-server.real 2>/dev/null || true)"
-[[ -x "$REAL" ]] || { echo "error: synapse-server.real not found" >&2; exit 1; }
+[[ -x "$REAL" ]] || { echo "error: missing synapse-server.real — re-run the installer" >&2; exit 1; }
 
 STATE_DIR="${SYNAPSE_STATE_DIR:-$HOME/.synapse}"
 PIDFILE="${SYNAPSE_PIDFILE:-$STATE_DIR/server.pid}"
@@ -22,6 +21,25 @@ mkdir -p "$STATE_DIR"
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 port_open() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
+
+stop_stale() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  local pid args
+  for pid in $(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true); do
+    args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+    if [[ "${args}" == *synapse-server* ]]; then
+      kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  sleep 0.4
+  for pid in $(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null || true); do
+    args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+    if [[ "${args}" == *synapse-server* ]]; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done
+  sleep 0.2
+}
 
 pairing_code() {
   "$REAL" pairing-code 2>/dev/null | grep -Eo '[0-9]{6}' | head -1 || true
@@ -69,8 +87,12 @@ do_start() {
     fi
     rm -f "$PIDFILE"
   fi
+
+  stop_stale
+  rm -f "$PIDFILE"
+
   if port_open; then
-    echo "FAIL  port $PORT already in use — run: synapse-server stop" >&2
+    echo "FAIL  port $PORT still in use — run: synapse-server stop" >&2
     exit 1
   fi
 
@@ -111,13 +133,15 @@ do_stop() {
     for _ in $(seq 1 25); do pid_alive "$pid" || break; sleep 0.2; done
     pid_alive "$pid" && kill -9 "$pid" 2>/dev/null || true
     echo "OK  stopped synapse-server (pid $pid)"
-  elif port_open; then
-    echo "WARN port $PORT still in use" >&2
-    exit 1
   else
-    echo "OK  synapse-server was not running"
+    stop_stale
   fi
   rm -f "$PIDFILE"
+  if port_open; then
+    echo "WARN port $PORT still in use" >&2
+    exit 1
+  fi
+  [[ -n "$pid" ]] || echo "OK  synapse-server was not running"
 }
 
 case "${1:-start}" in

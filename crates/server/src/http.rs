@@ -106,7 +106,7 @@ async fn client_loop(state: AppState, socket: WebSocket) {
         "sessions": sessions,
         "models": state.manager.catalog(),
         "defaultModel": state.manager.default_model_id(),
-        "cwds": state.manager.cwds(),
+        "cwds": state.manager.cwds().await,
     });
     let _ = ws_tx.send(Message::Text(hello.to_string())).await;
 
@@ -346,6 +346,95 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                             json!({"type":"error","error":e,"op":"delete"}).to_string(),
                         ))
                         .await;
+                }
+            }
+            "pin" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let pinned = cmd.get("pinned").and_then(|v| v.as_bool()).unwrap_or(true);
+                if let Err(e) = state.manager.set_pinned(&sid, pinned).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"pin"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "archive" => {
+                let ids: Vec<String> =
+                    if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    } else {
+                        cmd.get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .map(|s| vec![s.to_string()])
+                            .unwrap_or_default()
+                    };
+                if ids.is_empty() {
+                    continue;
+                }
+                if let Err(e) = state.manager.archive_many(&ids).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"archive"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "unarchive" => {
+                let ids: Vec<String> =
+                    if let Some(arr) = cmd.get("sessionIds").and_then(|v| v.as_array()) {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    } else {
+                        cmd.get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .map(|s| vec![s.to_string()])
+                            .unwrap_or_default()
+                    };
+                if ids.is_empty() {
+                    continue;
+                }
+                if let Err(e) = state.manager.unarchive_many(&ids).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"unarchive"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "refresh_cwds" => {
+                let cwds = state.manager.refresh_cwds().await;
+                let _ = out_tx
+                    .send(Message::Text(
+                        json!({"type":"cwds","cwds":cwds}).to_string(),
+                    ))
+                    .await;
+            }
+            "register_project" => {
+                let path = cmd.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                match state.manager.register_project(path).await {
+                    Ok(cwds) => {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"cwds","cwds":cwds}).to_string(),
+                            ))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"error","error":e,"op":"register_project"})
+                                    .to_string(),
+                            ))
+                            .await;
+                    }
                 }
             }
             _ => {}

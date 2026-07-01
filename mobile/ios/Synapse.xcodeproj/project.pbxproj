@@ -4,19 +4,64 @@
 	classes = {};
 	objectVersion = 56;
 	objects = {
+
+/* Begin PBXBuildFile section */
+		AA000503 /* libsynapse_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000010 /* libsynapse_app.a */; };
+		AA000510 /* SynapseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000511 /* SynapseApp.swift */; };
+		AA000512 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000513 /* AppModel.swift */; };
+		AA000514 /* SynapseConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000515 /* SynapseConnection.swift */; };
+		AA000516 /* SynapseModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000517 /* SynapseModels.swift */; };
+		AA000518 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000519 /* RootView.swift */; };
+		AA00051A /* WorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00051B /* WorkspacesView.swift */; };
+		AA00051C /* SessionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00051D /* SessionSheet.swift */; };
+		AA00051E /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00051F /* ChatWebView.swift */; };
+		AA000520 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000521 /* PairingView.swift */; };
+		AA000522 /* WebHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000523 /* WebHost.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
-		AA000001 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
-		AA000002 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
-		AA000003 /* AppDelegate.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AppDelegate.mm; sourceTree = "<group>"; };
 		AA000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000010 /* libsynapse_app.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libsynapse_app.a; sourceTree = "<group>"; };
 		AA000020 /* Synapse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Synapse.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA000511 /* SynapseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynapseApp.swift; sourceTree = "<group>"; };
+		AA000513 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		AA000515 /* SynapseConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynapseConnection.swift; sourceTree = "<group>"; };
+		AA000517 /* SynapseModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SynapseModels.swift; sourceTree = "<group>"; };
+		AA000519 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		AA00051B /* WorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacesView.swift; sourceTree = "<group>"; };
+		AA00051D /* SessionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSheet.swift; sourceTree = "<group>"; };
+		AA00051F /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
+		AA000521 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		AA000523 /* WebHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebHost.swift; sourceTree = "<group>"; };
+		AA000524 /* Synapse-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Synapse-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA000302 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (AA000503 /* libsynapse_app.a in Frameworks */);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		AA000100 /* Sources */ = {
 			isa = PBXGroup;
-			children = (AA000001 /* main.m */, AA000002 /* AppDelegate.h */, AA000003 /* AppDelegate.mm */, AA000004 /* Info.plist */);
+			children = (
+				AA000511 /* SynapseApp.swift */,
+				AA000513 /* AppModel.swift */,
+				AA000515 /* SynapseConnection.swift */,
+				AA000517 /* SynapseModels.swift */,
+				AA000519 /* RootView.swift */,
+				AA00051B /* WorkspacesView.swift */,
+				AA00051D /* SessionSheet.swift */,
+				AA00051F /* ChatWebView.swift */,
+				AA000521 /* PairingView.swift */,
+				AA000523 /* WebHost.swift */,
+				AA000524 /* Synapse-Bridging-Header.h */,
+				AA000004 /* Info.plist */,
+			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
@@ -40,7 +85,7 @@
 			buildPhases = (
 				AA000300 /* Build Rust staticlib */,
 				AA000301 /* Sources */,
-				AA000302 /* Frameworks */
+				AA000302 /* Frameworks */,
 			);
 			buildRules = ();
 			dependencies = ();
@@ -51,48 +96,10 @@
 		};
 /* End PBXNativeTarget section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		AA000300 /* Build Rust staticlib */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = ();
-			inputPaths = ();
-			name = "Build Rust staticlib";
-			outputPaths = ("$(SRCROOT)/../../target/aarch64-apple-ios/release/libsynapse_app.a");
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "cd \"$SRCROOT/../..\"\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then RUST_T=\"aarch64-apple-ios-sim\"; else RUST_T=\"aarch64-apple-ios\"; fi; cargo rustc -p synapse-app --lib --target \"$RUST_T\" --crate-type staticlib --release\n";
-		};
-/* End PBXShellScriptBuildPhase section */
-
-/* Begin PBXSourcesBuildPhase section */
-		AA000301 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (AA000501 /* main.m in Sources */, AA000502 /* AppDelegate.mm in Sources */);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXSourcesBuildPhase section */
-
-/* Begin PBXFrameworksBuildPhase section */
-		AA000302 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = ();
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXBuildFile section */
-		AA000501 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000001 /* main.m */; };
-		AA000502 /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = AA000003 /* AppDelegate.mm */; };
-		AA000503 /* libsynapse_app.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AA000010 /* libsynapse_app.a */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXProject section */
 		AA000600 /* Project object */ = {
 			isa = PBXProject;
-			attributes = {LastUpgradeCheck = 1400; };
+			attributes = {LastUpgradeCheck = 1500; };
 			buildConfigurationList = AA000700 /* Build configuration list for PBXProject */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
@@ -106,28 +113,65 @@
 		};
 /* End PBXProject section */
 
-/* Begin PBXContainerItemProxy section */
-/* End PBXContainerItemProxy section */
+/* Begin PBXShellScriptBuildPhase section */
+		AA000300 /* Build Rust staticlib */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Build Rust staticlib";
+			outputPaths = ("$(SRCROOT)/../../target/aarch64-apple-ios/release/libsynapse_app.a");
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"$SRCROOT/../..\"\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then RUST_T=\"aarch64-apple-ios-sim\"; else RUST_T=\"aarch64-apple-ios\"; fi\ncargo rustc -p synapse-app --lib --target \"$RUST_T\" --crate-type staticlib --release\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA000301 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000510 /* SynapseApp.swift in Sources */,
+				AA000512 /* AppModel.swift in Sources */,
+				AA000514 /* SynapseConnection.swift in Sources */,
+				AA000516 /* SynapseModels.swift in Sources */,
+				AA000518 /* RootView.swift in Sources */,
+				AA00051A /* WorkspacesView.swift in Sources */,
+				AA00051C /* SessionSheet.swift in Sources */,
+				AA00051E /* ChatWebView.swift in Sources */,
+				AA000520 /* PairingView.swift in Sources */,
+				AA000522 /* WebHost.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		AA000800 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
 				DEVELOPMENT_TEAM = GNJZA74ZW4;
 				INFOPLIST_FILE = Sources/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit");
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/../../target/aarch64-apple-ios/release";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
+					"$(SRCROOT)/../../target/aarch64-apple-ios-sim/release",
+				);
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Synapse-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
 			};
@@ -137,20 +181,26 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
 				DEVELOPMENT_TEAM = GNJZA74ZW4;
 				INFOPLIST_FILE = Sources/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit");
-				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/../../target/aarch64-apple-ios/release";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../target/aarch64-apple-ios-sim/release";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
+					"$(SRCROOT)/../../target/aarch64-apple-ios-sim/release",
+				);
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Synapse-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -162,7 +212,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				COPY_PHASE_STRIP = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				SDKROOT = iphoneos;
 			};
 			name = Release;
@@ -175,7 +225,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 			};

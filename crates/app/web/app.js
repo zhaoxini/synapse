@@ -9,14 +9,23 @@
 marked.setOptions({ breaks: true, gfm: true });
 
 const $ = (id) => document.getElementById(id);
+
+function haptic(style) {
+  if (window.__synapseHaptic__) window.__synapseHaptic__(style || "light");
+}
 const messagesEl = $("messages");
 const scroller = $("scroller");
 const emptyEl = $("empty");
 const inputEl = $("input");
 const sendBtn = $("sendBtn");
-const titleName = $("titleName");
-const subText = $("subText");
-const dot = $("dot");
+const pageTitle = $("pageTitle");
+const chatTitle = $("chatTitle");
+const searchWrap = $("searchWrap");
+const searchInput = $("searchInput");
+
+const URL_PARAMS = new URLSearchParams(location.search);
+/** iOS SwiftUI shell: native owns workspaces/nav; webview is chat-only. */
+const NATIVE_SHELL = URL_PARAMS.get("shell") === "native";
 
 const state = {
   ws: null,
@@ -24,13 +33,20 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
+  view: "workspaces", // "workspaces" | "chat" — home = workspace list
+  sessionDrawerWorkspace: null,
+  searchOpen: false,
+  searchQuery: "",
+  creating: false,
+  loadingHistory: false,
+  showArchived: false,
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
   defaultModel: "",    // pre-selected model id for new sessions
   pendingModel: null,  // model chosen before a session exists; used on create
-  cwds: [],            // project working dirs from hello (git repos)
-  pendingCwd: null,    // project chosen for the next create
+  cwds: [],            // workspace paths from hello (git repos)
+  pendingCwd: null,    // workspace chosen for the next create
   pendingMode: null,   // permission mode chosen before a session exists
   pendingSend: null,   // message queued while a new session is being created
   blocks: [],         // rendered message elements (for empty/clear bookkeeping)
@@ -39,29 +55,161 @@ const state = {
   // into a single "Worked for Xs ›" disclosure above the final reply text.
   //   { el, workWrap, workBody, replyWrap, items:[], tools:Map, text, startMs }
   turn: null,
+  stream: null,       // live stream_event parser (reset each turn)
   msNow: 0,           // monotonic-ish clock fed from frames (no Date in workflow ctx, fine here)
 };
 
-// ---- credential injection from native (pairing) ----
+state.stream = createStreamState();
+
+// ---- credential injection: native / URL / localStorage ----
+const CREDS_KEY = "synapse_creds";
+
 function creds() {
   if (window.__SYNAPSE__) return window.__SYNAPSE__;
-  // dev fallback from querystring
   const p = new URLSearchParams(location.search);
-  const h = p.get("host"), port = p.get("port"), tok = p.get("token");
-  if (h && tok) return { host: h, port: port || "4173", token: tok, tls: p.get("tls") === "1", path: p.get("path") || "" };
+  const h = p.get("host"), tok = p.get("token");
+  if (h && tok) {
+    return {
+      host: h,
+      port: p.get("port") || "4173",
+      token: tok,
+      tls: p.get("tls") === "1",
+      path: p.get("path") || "",
+    };
+  }
+  try {
+    const raw = localStorage.getItem(CREDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
   return null;
+}
+
+function persistCreds(c) {
+  try { localStorage.setItem(CREDS_KEY, JSON.stringify(c)); } catch {}
+}
+
+function clearCreds() {
+  try { localStorage.removeItem(CREDS_KEY); } catch {}
+}
+
+// Parse synapse:// / wss:// pairing links (mirrors crates/app/src/net.rs).
+function parsePairLink(link) {
+  const raw = link.trim();
+  if (!raw) return null;
+  let body = raw
+    .replace(/^synapse:\/\//, "")
+    .replace(/^synapse:/, "")
+    .replace(/^wss:\/\//, "")
+    .replace(/^ws:\/\//, "");
+  const qIdx = body.indexOf("?");
+  const authPath = qIdx >= 0 ? body.slice(0, qIdx) : body;
+  const query = qIdx >= 0 ? body.slice(qIdx + 1) : "";
+  const params = new URLSearchParams(query);
+  const token = params.get("token") || "";
+  const tls = params.get("tls") === "1" || params.get("tls") === "true";
+  const deviceId = params.get("deviceId") || "";
+  if (!token) return null;
+
+  const slash = authPath.indexOf("/");
+  if (slash >= 0) {
+    const authority = authPath.slice(0, slash);
+    const path = authPath.slice(slash);
+    const { host, port } = splitHostPort(authority, tls);
+    if (!host) return null;
+    return { host, port, token, tls, path, deviceId };
+  }
+  const { host, port } = splitHostPort(authPath, tls);
+  if (!host) return null;
+  return { host, port, token, tls, path: "", deviceId };
+}
+
+function splitHostPort(authority, tls) {
+  const i = authority.lastIndexOf(":");
+  if (i > 0) {
+    const port = authority.slice(i + 1);
+    if (/^\d+$/.test(port)) {
+      return { host: authority.slice(0, i), port };
+    }
+  }
+  return { host: authority, port: tls ? "443" : "80" };
+}
+
+function showConnectOverlay() {
+  $("connectOverlay").classList.remove("hidden");
+  setPairingFieldsEnabled(true);
+}
+function hideConnectOverlay() {
+  $("connectOverlay").classList.add("hidden");
+  setPairingFieldsEnabled(false);
+}
+
+const PAIRING_FIELD_IDS = ["pairLink", "pairHost", "pairPort", "pairToken"];
+
+function setPairingFieldsEnabled(on) {
+  for (const id of PAIRING_FIELD_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = !on;
+    el.tabIndex = on ? 0 : -1;
+    el.setAttribute("autocomplete", "off");
+  }
+}
+
+function notifyNative(op, data) {
+  if (!NATIVE_SHELL) return;
+  try {
+    if (typeof webkit !== "undefined" && webkit.messageHandlers && webkit.messageHandlers.synapse) {
+      webkit.messageHandlers.synapse.postMessage(Object.assign({ op }, data || {}));
+    }
+  } catch {}
+}
+
+function applyCreds(c) {
+  window.__SYNAPSE__ = c;
+  persistCreds(c);
+  hideConnectOverlay();
+  state.url = buildUrl(c);
+  state.backoff = 1000;
+  doConnect(true);
+}
+
+function pairFromForm() {
+  const link = ($("pairLink").value || "").trim();
+  if (link) {
+    const c = parsePairLink(link);
+    if (!c) { toast("Invalid pairing link"); return; }
+    applyCreds(c);
+    return;
+  }
+  const host = ($("pairHost").value || "").trim();
+  const token = ($("pairToken").value || "").trim();
+  if (!host || !token) { toast("Host and token required"); return; }
+  applyCreds({
+    host,
+    port: ($("pairPort").value || "4173").trim(),
+    token,
+    tls: $("pairTls").checked,
+    path: "",
+  });
 }
 
 function buildUrl(c) {
   const scheme = c.tls ? "wss" : "ws";
-  if (c.path) return `${scheme}://${c.host}:${c.port}${c.path}?token=${c.token}`;
-  return `${scheme}://${c.host}:${c.port}/?token=${c.token}`;
+  if (c.path) {
+    const q = c.deviceId
+      ? `deviceId=${encodeURIComponent(c.deviceId)}&token=${encodeURIComponent(c.token)}`
+      : `token=${encodeURIComponent(c.token)}`;
+    return `${scheme}://${c.host}:${c.port}${c.path}?${q}`;
+  }
+  return `${scheme}://${c.host}:${c.port}/?token=${encodeURIComponent(c.token)}`;
 }
 
 // =================== connection ===================
 function connect() {
   const c = creds();
-  if (!c) { toast("No pairing credentials"); return; }
+  if (!c) { showConnectOverlay(); return; }
+  hideConnectOverlay();
+  window.__SYNAPSE__ = c;
   state.url = buildUrl(c);
   doConnect(true);
 }
@@ -72,12 +220,19 @@ function doConnect(first) {
   state.ws.onopen = () => {
     state.connected = true;
     state.backoff = 1000;
+    if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
+    hideConnectOverlay();
     $("reconnect").classList.remove("show");
-    // prime session list
-    send({ op: "list" });
-    if (first) {
-      // pick first session after list arrives; nothing else here
-    } else if (state.activeId) {
+    if (NATIVE_SHELL) {
+      send({ op: "list" });
+      const sid = URL_PARAMS.get("sessionId");
+      if (sid) select(sid);
+      notifyNative("chatReady");
+    } else {
+      showWorkspaces();
+      send({ op: "list" });
+    }
+    if (!NATIVE_SHELL && !first && state.activeId) {
       send({ op: "history", sessionId: state.activeId, limit: 400 });
     }
   };
@@ -88,8 +243,8 @@ function doConnect(first) {
   state.ws.onclose = () => {
     state.connected = false;
     if (first) {
-      // pairing failure — surface, no retry loop (native will re-inject on retry)
-      toast("Could not connect");
+      toast("Could not connect — check link and server");
+      showConnectOverlay();
     } else {
       $("reconnect").classList.add("show");
       scheduleReconnect(false);
@@ -124,6 +279,7 @@ function handle(v) {
       break;
     case "sessions": setSessions(v.sessions || []); break;
     case "created":
+      state.creating = false;
       setSessions(state.sessions); // list update follows via event
       select(v.session.id);
       // The pick has been consumed by create; clear it so currentCwd()/
@@ -135,16 +291,20 @@ function handle(v) {
       }
       break;
     case "sessions": break;
+    case "cwds":
+      state.cwds = v.cwds || [];
+      if (state.view === "workspaces") renderWorkspaceList();
+      break;
     case "history":
-      // Ignore a stale response for a session we've navigated away from: a slow
-      // history (large transcript, mobile link) can land after the user switched,
-      // painting the wrong session's messages under the new one ("session错乱").
-      // Mirrors the live-event guard below.
       if (v.sessionId && v.sessionId !== state.activeId) break;
+      endHistoryLoad();
       if (v.found !== false) ingestHistory(v.events || []);
+      else clearMessages();
       break;
     case "event": handleEvent(v.event); break;
     case "error":
+      state.creating = false;
+      if (state.view === "workspaces") renderWorkspaceList();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -167,17 +327,18 @@ function handleEvent(evt) {
     const i = state.sessions.findIndex(x => x.id === evt.sessionId);
     if (i >= 0) state.sessions.splice(i, 1);
     if (evt.sessionId === state.activeId) {
-      state.activeId = ""; clearMessages(); titleName.textContent = "Synapse"; setBusy(false);
+      state.activeId = ""; clearMessages(); setBusy(false);
+      showWorkspaces();
+      updateChrome();
     }
-    renderSessions();
-    if (!state.activeId && state.sessions.length) select(state.sessions[0].id);
+    renderWorkspaceList();
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
     setSessionState(evt.sessionId, sub === "turn_started" ? "busy" : (sub === "bridge_error" ? "error" : "idle"));
     if (evt.sessionId === state.activeId) {
       if (sub === "turn_started") { startTurn(); setBusy(true); }
-      else if (sub === "turn_stopped") { setBusy(false); finalizeStream(); }
+      else if (sub === "turn_stopped") { setBusy(false); state.stream.reset(); finalizeStream(); }
       else { pushError(str(evt.error) || "Turn failed"); setBusy(false); finalizeStream(); }
     }
     return;
@@ -185,6 +346,7 @@ function handleEvent(evt) {
   if (evt.sessionId && evt.sessionId !== state.activeId) return;
   if (typeof evt.ttft_ms === "number") state.msNow += 0; // (kept simple; elapsed uses counters below)
   if (t === "system") { /* api_retry / fallback_to_json: no-op for the open view */ return; }
+  if (t === "stream_event") { ingestStreamEvent(evt); return; }
   if (t === "assistant") { ingestAssistant(evt); return; }
   if (t === "permission_request") { showPermission(evt); return; }
   if (t === "user") {
@@ -202,11 +364,171 @@ function handleEvent(evt) {
     }
     return;
   }
-  if (t === "result") { ingestResult(evt); return; }
+  if (t === "result") { state.stream.reset(); ingestResult(evt); return; }
   if (t === "stderr") {
     const txt = str(evt.text);
     if (txt) pushStderr(txt);
     return;
+  }
+}
+
+// =================== stream_event parser (mirrors crates/app StreamState) ===================
+function createStreamState() {
+  return {
+    messageId: "",
+    blocks: new Map(),
+    blockOrder: [],
+    toolInputBuf: new Map(),
+    reset() {
+      this.messageId = "";
+      this.blocks.clear();
+      this.blockOrder = [];
+      this.toolInputBuf.clear();
+    },
+    apply(evt) {
+      if (evt.type !== "stream_event") return;
+      this.applyAnthropic(evt.event || {});
+    },
+    applyAnthropic(ev) {
+      const et = ev.type || "";
+      if (et === "message_start") {
+        const id = ev.message && ev.message.id;
+        if (id) this.messageId = id;
+        this.blocks.clear();
+        this.blockOrder = [];
+        this.toolInputBuf.clear();
+        return;
+      }
+      if (et === "content_block_start") {
+        const idx = ev.index ?? 0;
+        if (this.blocks.has(idx)) return;
+        const cb = ev.content_block || {};
+        const bt = cb.type || "text";
+        const block = { kind: bt === "tool_use" ? "tool" : bt, text: "" };
+        if (bt === "tool_use") {
+          block.toolId = cb.id || "";
+          block.toolName = cb.name || "tool";
+          block.toolInput = (cb.input && typeof cb.input === "object") ? cb.input : {};
+          block.toolStatus = "running";
+        } else if (bt === "thinking") {
+          block.text = cb.thinking || "";
+        } else {
+          block.text = cb.text || "";
+        }
+        this.blocks.set(idx, block);
+        this.blockOrder.push(idx);
+        return;
+      }
+      if (et === "content_block_delta") {
+        const idx = ev.index ?? 0;
+        let block = this.blocks.get(idx);
+        if (!block) {
+          block = { kind: "text", text: "" };
+          this.blocks.set(idx, block);
+          this.blockOrder.push(idx);
+        }
+        const delta = ev.delta || {};
+        const dt = delta.type || "";
+        if (dt === "text_delta") {
+          block.kind = "text";
+          block.text = (block.text || "") + (delta.text || "");
+        } else if (dt === "thinking_delta") {
+          block.kind = "thinking";
+          block.text = (block.text || "") + (delta.thinking || "");
+        } else if (dt === "input_json_delta") {
+          block.kind = "tool";
+          const buf = (this.toolInputBuf.get(idx) || "") + (delta.partial_json || "");
+          this.toolInputBuf.set(idx, buf);
+          try {
+            const parsed = JSON.parse(buf);
+            block.toolInput = parsed;
+            block.toolName = block.toolName || "tool";
+          } catch { /* partial json */ }
+        }
+      }
+    },
+  };
+}
+
+function thinkingText(blk) {
+  if (!blk || typeof blk !== "object") return "";
+  if (typeof blk.thinking === "string") return blk.thinking;
+  if (typeof blk.text === "string" && blk.type === "thinking") return blk.text;
+  if (blk.type === "redacted_thinking") {
+    return typeof blk.data === "string" && blk.data
+      ? "[Encrypted thinking]"
+      : "[Encrypted thinking — content not available]";
+  }
+  return "";
+}
+
+const THINKING_EMPTY_HINT = "思考内容未返回。若模型启用了加密思考，终端可能不会下发明文。";
+
+function ingestStreamEvent(evt) {
+  if (!state.turn) startTurn();
+  state.stream.apply(evt);
+  flushStreamToTurn();
+}
+
+function flushStreamToTurn() {
+  const tn = state.turn;
+  const st = state.stream;
+  if (!tn || !st.blockOrder.length) return;
+  const prevTools = new Map(tn.tools);
+  const order = [];
+  const tools = new Map();
+  for (const idx of st.blockOrder) {
+    const b = st.blocks.get(idx);
+    if (!b) continue;
+    if (b.kind === "thinking") {
+      order.push({ kind: "thinking", text: b.text || "" });
+    } else if (b.kind === "tool") {
+      const id = b.toolId || `stream-${idx}`;
+      const prev = prevTools.get(id);
+      tools.set(id, {
+        id,
+        name: b.toolName || "tool",
+        args: b.toolInput || {},
+        input: JSON.stringify(b.toolInput ?? {}, null, 2),
+        status: prev ? prev.status : (b.toolStatus || "running"),
+        output: prev ? prev.output : "",
+      });
+      order.push({ kind: "tool", id });
+    } else if (b.kind === "text") {
+      order.push({ kind: "text", text: b.text || "" });
+    }
+  }
+  tn.order = order;
+  tn.tools = tools;
+  ensureTurnInDom();
+  renderTurn(false);
+  updatePulse();
+  ensurePinned();
+}
+
+function rebuildTurnFromMessage(tn, content) {
+  const prevTools = new Map(tn.tools);
+  tn.order = [];
+  tn.tools = new Map();
+  for (const blk of content) {
+    if (!blk || !blk.type) continue;
+    if (blk.type === "text" && typeof blk.text === "string") {
+      appendSeg(tn, "text", blk.text);
+    } else if (blk.type === "thinking" || blk.type === "redacted_thinking") {
+      appendSeg(tn, "thinking", thinkingText(blk));
+    } else if (blk.type === "tool_use") {
+      const id = blk.id;
+      const prev = prevTools.get(id);
+      const tool = {
+        id, name: blk.name,
+        args: (blk.input && typeof blk.input === "object") ? blk.input : {},
+        input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
+        status: prev ? prev.status : "running",
+        output: prev ? prev.output : "",
+      };
+      tn.tools.set(id, tool);
+      tn.order.push({ kind: "tool", id });
+    }
   }
 }
 
@@ -217,6 +539,7 @@ function handleEvent(evt) {
 function startTurn() {
   // close any previous turn first (defensive; turn_stopped normally does this)
   if (state.turn) finalizeStream();
+  state.stream.reset();
   const el = mkMsg("assistant");
   const body = el.querySelector(".body");
   const workWrap = document.createElement("div"); workWrap.className = "work";
@@ -231,6 +554,7 @@ function startTurn() {
     ticks: 0,             // live elapsed: counts seconds via pulse timer
     firstTs: 0, lastTs: 0,// frame timestamps (ms) — elapsed source for history
     appended: false,
+    activityCount: 0,
   };
   // don't add to DOM until there's content (avoid empty box)
 }
@@ -263,22 +587,31 @@ function ingestAssistant(evt) {
   const ts = evt.timestamp ? Date.parse(evt.timestamp) : 0;
   if (ts) { if (!tn.firstTs) tn.firstTs = ts; tn.lastTs = ts; }
 
-  for (const blk of content) {
-    if (blk.type === "text" && typeof blk.text === "string") {
-      appendSeg(tn, "text", blk.text);
-    } else if (blk.type === "thinking" && typeof blk.thinking === "string" && blk.thinking) {
-      appendSeg(tn, "thinking", blk.thinking);
-    } else if (blk.type === "tool_use") {
-      const tool = {
-        id: blk.id, name: blk.name,
-        args: (blk.input && typeof blk.input === "object") ? blk.input : {},
-        input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
-        status: "running", output: "",
-      };
-      tn.tools.set(blk.id, tool);
-      tn.order.push({ kind: "tool", id: blk.id });
+  const mid = msg.id || "";
+  const streaming = state.busy && mid && state.stream.messageId === mid;
+  if (streaming || (state.busy && state.stream.blockOrder.length > 0)) {
+    rebuildTurnFromMessage(tn, content);
+  } else {
+    for (const blk of content) {
+      if (blk.type === "text" && typeof blk.text === "string") {
+        appendSeg(tn, "text", blk.text);
+      } else if (blk.type === "thinking" || blk.type === "redacted_thinking") {
+        appendSeg(tn, "thinking", thinkingText(blk));
+      } else if (blk.type === "tool_use") {
+        const tool = {
+          id: blk.id, name: blk.name,
+          args: (blk.input && typeof blk.input === "object") ? blk.input : {},
+          input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
+          status: "running", output: "",
+        };
+        const prev = tn.tools.get(blk.id);
+        if (prev) { tool.status = prev.status; tool.output = prev.output; }
+        tn.tools.set(blk.id, tool);
+        tn.order.push({ kind: "tool", id: blk.id });
+      }
     }
   }
+  if (streaming) state.stream.reset();
 
   const hasContent = tn.order.length > 0;
   if (hasContent) { ensureTurnInDom(); renderTurn(false); }
@@ -302,58 +635,382 @@ function splitTurn(tn) {
   return { replyText: "", workItems: tn.order };
 }
 
-// Render the active turn. `settled` collapses the work region into a
-// "Worked for Xs ›" disclosure (Synara style); while running it shows live.
+// Render the active turn. While running, work shows in a fixed-height activity
+// feed that scrolls upward as new steps arrive; when settled it collapses to one line.
 function renderTurn(settled) {
   const tn = state.turn;
   if (!tn) return;
   const { replyText, workItems } = splitTurn(tn);
-  const hasWork = workItems.length > 0;
+  const hasWork = workItems.length > 0 || (state.busy && !settled);
 
-  // ----- work region -----
   tn.workWrap.innerHTML = "";
   if (hasWork) {
     if (settled) {
-      // collapsed: one "Worked for Xs ›" row + hairline; expand to reveal items
-      const wrap = document.createElement("div"); wrap.className = "worked";
-      const trig = document.createElement("button"); trig.className = "worked-trig";
-      // elapsed: live timer (ticks) if present, else frame-timestamp span (history)
       const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
       const secs = tn.ticks > 0 ? tn.ticks : tsSecs;
-      const label = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
-      trig.innerHTML = `<span>${label}</span><span class="chev">▸</span>`;
-      const panel = document.createElement("div"); panel.className = "worked-panel";
-      buildWorkItems(panel, workItems, tn);
-      trig.addEventListener("click", () => {
-        wrap.classList.toggle("open");
-      });
-      wrap.appendChild(trig); wrap.appendChild(panel);
-      tn.workWrap.appendChild(wrap);
-      const hr = document.createElement("div"); hr.className = "hr";
-      tn.workWrap.appendChild(hr);
+      const summary = summarizeWork(workItems, tn, secs);
+      const line = statusLine(summary, () => openWorkSheet(workItems, tn, secs), "work-summary has-action");
+      tn.workWrap.appendChild(line);
     } else {
-      // live: show work items inline (thinking card + running tool cards)
-      buildWorkItems(tn.workWrap, workItems, tn);
+      const feed = document.createElement("div");
+      feed.className = "activity-feed";
+      const scroll = document.createElement("div");
+      scroll.className = "activity-scroll";
+      feed.appendChild(scroll);
+      tn.workWrap.appendChild(feed);
+      tn.activityFeed = feed;
+      renderActivityFeed(scroll, workItems, tn);
+      scrollActivityFeed(feed, scroll);
     }
   }
 
-  // ----- reply region -----
   tn.replyWrap.innerHTML = "";
   if (replyText) tn.replyWrap.appendChild(mdEl(replyText));
 }
 
-function buildWorkItems(container, items, tn) {
+function scrollActivityFeed(feed, scroll) {
+  requestAnimationFrame(() => {
+    const overflow = scroll.scrollHeight - feed.clientHeight;
+    if (overflow > 0) scroll.style.transform = `translateY(-${overflow}px)`;
+    else scroll.style.transform = "";
+  });
+}
+
+function renderActivityFeed(scroll, items, tn) {
+  const prev = tn.activityCount || 0;
+  scroll.innerHTML = "";
+  const lastIdx = items.length - 1;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (i === lastIdx && state.busy && isItemActive(it, tn)) continue;
+    appendActivityLine(scroll, it, tn, i, items);
+  }
+  const now = activeItemLine(items, tn);
+  if (now) {
+    const cls = "status-now has-action" + (now.running ? " running" : "");
+    scroll.appendChild(statusLine(now.label, now.onClick, cls));
+  }
+  const lines = scroll.querySelectorAll(".status-line");
+  for (let i = prev; i < lines.length; i++) lines[i].classList.add("line-enter");
+  tn.activityCount = lines.length;
+}
+
+function isItemActive(it, tn) {
+  if (it.kind === "thinking") return isThinkingActive(tn, it);
+  if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    return t && t.status === "running";
+  }
+  return false;
+}
+
+function appendActivityLine(scroll, it, tn, idx, items) {
+  if (it.kind === "thinking") {
+    const secs = thinkingSecsForItem(tn, it, idx, items);
+    scroll.appendChild(statusLine(
+      secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought",
+      () => openThinkingSheet(it.text, secs),
+      "has-action"
+    ));
+  } else if (it.kind === "tool") {
+    const t = tn.tools.get(it.id);
+    if (!t) return;
+    scroll.appendChild(statusLine(toolStatusLabel(t), () => openToolSheet(t), "has-action"));
+  }
+}
+
+function thinkingSecsForItem(tn, item, idx, items) {
+  if (idx < items.length - 1) {
+    const next = items[idx + 1];
+    if (next && next.kind === "tool") return Math.max(1, thinkingSecs(tn));
+  }
+  const secs = thinkingSecs(tn);
+  return secs > 0 ? secs : 1;
+}
+
+function activeItemLine(items, tn) {
+  if (!state.busy) return null;
+  const last = items[items.length - 1];
+  if (last && last.kind === "text" && last.text) return null;
+  if (!last) return { label: "Planning next moves", running: true };
+  if (last.kind === "thinking" && isThinkingActive(tn, last)) {
+    const secs = thinkingSecs(tn);
+    return {
+      label: secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thinking…",
+      running: true,
+      onClick: () => openThinkingSheet(last.text, secs),
+    };
+  }
+  if (last.kind === "tool") {
+    const t = tn.tools.get(last.id);
+    if (t && t.status === "running") {
+      return { label: currentToolAction(t), running: true, onClick: () => openToolSheet(t) };
+    }
+  }
+  return { label: "Planning next moves", running: true };
+}
+
+function currentToolAction(t) {
+  const a = t.args || {};
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  switch (t.name) {
+    case "Edit": case "Write": case "MultiEdit": case "NotebookEdit":
+      return file ? `Editing ${file}` : "Editing";
+    case "Read": case "LS":
+      return file ? `Reading ${file}` : "Reading";
+    case "Grep": return `Searching ${str(a.pattern)}`;
+    case "Glob": return `Searching ${str(a.pattern)}`;
+    case "Bash": return "Running command";
+    case "Task": return "Running task";
+    case "WebSearch": return `Searching ${firstLine(str(a.query))}`;
+    case "WebFetch": return `Fetching ${hostOf(a.url)}`;
+    case "TodoWrite": return "Updating plan";
+    default: return toolMeta(t).title;
+  }
+}
+
+function statusLine(label, onClick, extraClass) {
+  const btn = document.createElement("button");
+  btn.className = "status-line" + (extraClass ? " " + extraClass : "");
+  if (onClick) {
+    btn.classList.add("has-action");
+    btn.innerHTML = `${escapeHtml(label)}<span class="chev"> ›</span>`;
+    btn.addEventListener("click", onClick);
+  } else {
+    btn.textContent = label;
+  }
+  return btn;
+}
+
+function thinkingSecs(tn) {
+  const tsSecs = tn.lastTs > tn.firstTs ? Math.round((tn.lastTs - tn.firstTs) / 1000) : 0;
+  return tn.ticks > 0 ? tn.ticks : tsSecs;
+}
+
+function isThinkingActive(tn, thinkingItem) {
+  const idx = tn.order.indexOf(thinkingItem);
+  const after = tn.order.slice(idx + 1);
+  return after.length === 0 || after.every(x => x.kind === "thinking");
+}
+
+function thinkingLabel(secs, running) {
+  if (running) return "Thinking…";
+  return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+}
+
+function toolStatusLabel(t) {
+  const a = t.args || {};
+  const meta = toolMeta(t);
+  const file = basename(a.file_path || a.path || a.notebook_path || "");
+  if (t.status === "running") return currentToolAction(t);
+  switch (t.name) {
+    case "Edit": {
+      const d = lineDiff(str(a.old_string), str(a.new_string));
+      return `Edited ${file} ${diffStat(d)}`;
+    }
+    case "MultiEdit": {
+      const edits = Array.isArray(a.edits) ? a.edits : [];
+      let ad = 0, de = 0;
+      for (const e of edits) { const d = lineDiff(str(e.old_string), str(e.new_string)); ad += d.adds; de += d.dels; }
+      return `Edited ${file} +${ad} −${de}`;
+    }
+    case "Write": {
+      const n = str(a.content).split("\n").length;
+      return `Edited ${file} +${n}`;
+    }
+    case "NotebookEdit":
+      return `Edited ${file}`;
+    case "Read": case "LS":
+      return file ? `Read ${file}` : "Explored files";
+    case "Grep":
+      return `Grepped ${str(a.pattern)}${a.path ? " in " + basename(a.path) : ""}`;
+    case "Glob":
+      return `Searched ${str(a.pattern)}`;
+    case "Bash":
+      return `Ran ${firstLine(str(a.command))}`;
+    case "Task":
+      return `Completed task ${meta.sub || meta.title}`;
+    case "WebSearch":
+      return `Searched ${firstLine(str(a.query))}`;
+    case "WebFetch":
+      return `Fetched ${hostOf(a.url)}`;
+    case "TodoWrite":
+      return "Updated plan";
+    case "AskUserQuestion":
+      return `Asked ${firstLine(askText(a))}`;
+    case "ExitPlanMode": case "exit_plan_mode":
+      return "Proposed plan";
+    default:
+      return `Used ${meta.title.toLowerCase()}${meta.sub ? " · " + meta.sub : ""}`;
+  }
+}
+
+function summarizeWork(items, tn, secs) {
+  let files = 0, searches = 0, edits = 0, other = 0, hasThinking = false;
   for (const it of items) {
+    if (it.kind === "thinking") { hasThinking = true; continue; }
+    if (it.kind !== "tool") continue;
+    const t = tn.tools.get(it.id);
+    if (!t) continue;
+    if (["Read", "LS"].includes(t.name)) files++;
+    else if (["Grep", "Glob", "WebSearch"].includes(t.name)) searches++;
+    else if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(t.name)) edits++;
+    else other++;
+  }
+  const parts = [];
+  if (files) parts.push(`${files} file${files > 1 ? "s" : ""}`);
+  if (searches) parts.push(`${searches} search${searches > 1 ? "es" : ""}`);
+  if (edits) parts.push(`${edits} edit${edits > 1 ? "s" : ""}`);
+  if (other) parts.push(`${other} other tool${other > 1 ? "s" : ""}`);
+  if (parts.length) return `Explored ${parts.join(", ")}`;
+  if (hasThinking) return secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought";
+  return secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+}
+
+// Bottom sheet for expanded thinking / tool / work details
+function openSheet(title, content) {
+  $("sheetTitle").textContent = title;
+  const body = $("sheetBody");
+  body.innerHTML = "";
+  if (typeof content === "string") {
+    const pre = document.createElement("div");
+    pre.className = "sheet-thinking";
+    pre.textContent = content;
+    body.appendChild(pre);
+  } else {
+    body.appendChild(content);
+  }
+  $("sheetMask").classList.add("show");
+  $("bottomSheet").classList.add("show");
+  $("bottomSheet").style.transform = "";
+}
+function closeSheet() {
+  $("sheetMask").classList.remove("show");
+  $("bottomSheet").classList.remove("show");
+  $("bottomSheet").classList.remove("dragging");
+  $("bottomSheet").classList.remove("sheet-picker");
+  $("bottomSheet").style.transform = "";
+}
+function openThinkingSheet(text, secs) {
+  const body = (text || "").trim() || THINKING_EMPTY_HINT;
+  openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", body);
+}
+function openToolSheet(t) {
+  const meta = toolMeta(t);
+  const wrap = document.createElement("div");
+  const card = toolCard(t);
+  card.classList.add("open");
+  wrap.appendChild(card);
+  openSheet(meta.title + (meta.sub ? ` · ${meta.sub}` : ""), wrap);
+}
+function openWorkSheet(items, tn, secs) {
+  const wrap = document.createElement("div");
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const block = document.createElement("div");
+    block.className = "sheet-item";
+    const lbl = document.createElement("div");
+    lbl.className = "sheet-item-label";
     if (it.kind === "thinking") {
-      container.appendChild(cardEl("thinking", "✦", "Thinking", null, it.text));
-    } else if (it.kind === "text") {
-      container.appendChild(mdEl(it.text));   // earlier (non-trailing) reply text
+      const itemSecs = thinkingSecsForItem(tn, it, i, items);
+      lbl.textContent = thinkingLabel(itemSecs, false);
+      const pre = document.createElement("div");
+      pre.className = "sheet-thinking";
+      pre.textContent = (it.text || "").trim() || THINKING_EMPTY_HINT;
+      block.appendChild(lbl); block.appendChild(pre);
     } else if (it.kind === "tool") {
       const t = tn.tools.get(it.id);
       if (!t) continue;
-      container.appendChild(toolCard(t));
+      lbl.textContent = toolStatusLabel(t);
+      block.appendChild(lbl);
+      block.appendChild(toolCard(t));
+    } else if (it.kind === "text") {
+      lbl.textContent = "Draft";
+      block.appendChild(lbl);
+      block.appendChild(mdEl(it.text));
     }
+    wrap.appendChild(block);
   }
+  const title = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
+  openSheet(title, wrap);
+}
+
+const MODEL_SEARCH_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+const MODEL_MORE_SVG = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="5" cy="10" r="1.2" fill="currentColor"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/></svg>`;
+
+function openModelSheet() {
+  closeMenus();
+  const cur = currentModelId();
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+
+  const searchWrap = document.createElement("div");
+  searchWrap.className = "model-search-wrap";
+  searchWrap.innerHTML = `<span class="model-search-ic">${MODEL_SEARCH_SVG}</span>`;
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "model-search";
+  search.placeholder = "Search";
+  search.autocomplete = "off";
+  searchWrap.appendChild(search);
+  wrap.appendChild(searchWrap);
+
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+
+  const addSection = (title) => {
+    const h = document.createElement("div");
+    h.className = "model-section";
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
+  const addRow = (id, label, showMore) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-row" + (id === cur ? " sel" : "");
+    row.dataset.id = id;
+    row.innerHTML =
+      `<span class="model-row-label">${escapeHtml(label)}</span>` +
+      (id === cur
+        ? `<span class="model-row-check" aria-label="Selected">✓</span>`
+        : (showMore ? `<span class="model-row-more">${MODEL_MORE_SVG}</span>` : ""));
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".model-row-more")) return;
+      chooseModel(id);
+    });
+    list.appendChild(row);
+  };
+
+  const renderList = (q) => {
+    list.innerHTML = "";
+    const query = (q || "").trim().toLowerCase();
+    if (!query || "auto".includes(query)) {
+      addSection("Active");
+      addRow("", "Auto", false);
+    }
+    const models = state.models.filter((m) =>
+      !query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query)
+    );
+    if (models.length) {
+      addSection("More");
+      for (const m of models) addRow(m.id, m.label, true);
+    } else if (query && query !== "auto") {
+      addSection("More");
+      const empty = document.createElement("div");
+      empty.className = "model-empty";
+      empty.textContent = "No models match your search";
+      list.appendChild(empty);
+    }
+  };
+
+  search.addEventListener("input", () => renderList(search.value));
+  renderList("");
+  wrap.appendChild(list);
+
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Model", wrap);
+  requestAnimationFrame(() => search.focus());
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -638,7 +1295,6 @@ function showPermission(evt) {
   body.appendChild(card); permEl.appendChild(body);
   messagesEl.appendChild(permEl);
   emptyEl.classList.add("hidden");
-  if (pulseEl) { pulseEl.remove(); pulseEl = null; }  // await a human, not "working"
   ensurePinned();
 }
 function removePermission() { if (permEl) { permEl.remove(); permEl = null; } }
@@ -659,7 +1315,7 @@ function currentMode() {
   const s = state.sessions.find(x => x.id === state.activeId);
   return (s ? s.permission_mode : state.pendingMode) || "default";
 }
-function syncPermLabel() { const el = $("permLabel"); if (el) el.textContent = permLabelFor(currentMode()); }
+function syncPermLabel() { /* permission mode shown in attach menu */ }
 function chooseMode(mode) {
   closeMenus();
   if (state.activeId) {
@@ -671,21 +1327,40 @@ function chooseMode(mode) {
   }
   syncPermLabel();
 }
-function initPermPill() {
-  const controls = $("composerControls"); if (!controls || $("permCtl")) return;
-  const pill = document.createElement("span");
-  pill.className = "ctl"; pill.id = "permCtl";
-  pill.innerHTML = `<span class="ico">⚑</span><span id="permLabel">Ask</span>`;
-  controls.insertBefore(pill, controls.querySelector(".spacer"));
+function initAttachMenu() {
+  const btn = $("attachBtn");
+  if (!btn) return;
   const menu = document.createElement("div");
   menu.className = "model-menu"; menu.id = "permMenu";
   $("composer").appendChild(menu);
-  pill.addEventListener("click", (e) => {
+  btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleMenu("permMenu", () => openMenu("permMenu",
-      PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, ""));
+    toggleMenu("attachMenu", openAttachMenu);
   });
-  syncPermLabel();
+}
+function openAttachMenu() {
+  closeMenus();
+  const menu = $("attachMenu");
+  menu.innerHTML = "";
+  const addRow = (label, onClick) => {
+    const row = document.createElement("div");
+    row.className = "model-item";
+    row.innerHTML = `<span>${escapeHtml(label)}</span>`;
+    row.addEventListener("click", (e) => { e.stopPropagation(); closeMenus(); onClick(); });
+    menu.appendChild(row);
+  };
+  addRow(`Workspace · ${basename(currentCwd()) || "Local"}`, () => openLocalMenu());
+  addRow(`Permissions · ${permLabelFor(currentMode())}`, () => {
+    openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
+  });
+  addRow("Change server…", () => {
+    if (state.ws) { state.ws.close(); state.ws = null; }
+    state.connected = false;
+    clearCreds();
+    window.__SYNAPSE__ = null;
+    showConnectOverlay();
+  });
+  menu.classList.add("show");
 }
 
 function ingestResult(evt) {
@@ -905,6 +1580,7 @@ function pushStderr(text) {
 }
 
 function echoUser(text, mid) {
+  endHistoryLoad();
   // dedupe: don't re-add a user turn we already echoed for this mid
   if (mid) {
     const existing = state.blocks.find(b => b.role === "user" && b.mid === mid);
@@ -923,6 +1599,7 @@ function echoUser(text, mid) {
 }
 
 function addBlock(el) {
+  endHistoryLoad();
   state.blocks.push({ el });
   messagesEl.appendChild(el);
   emptyEl.classList.add("hidden");
@@ -932,7 +1609,23 @@ function clearMessages() {
   messagesEl.innerHTML = "";
   state.blocks = [];
   permEl = null;
+  endHistoryLoad();
   emptyEl.classList.remove("hidden");
+}
+
+function beginHistoryLoad() {
+  state.loadingHistory = true;
+  messagesEl.innerHTML = "";
+  state.blocks = [];
+  emptyEl.classList.add("hidden");
+  scroller.classList.add("history-loading");
+}
+
+function endHistoryLoad() {
+  if (!state.loadingHistory && !scroller.classList.contains("history-loading")) return;
+  state.loadingHistory = false;
+  scroller.classList.remove("history-loading");
+  messagesEl.querySelectorAll(".msg-skeleton").forEach((el) => el.remove());
 }
 
 // =================== smart scroll ===================
@@ -973,39 +1666,34 @@ $("newPill").addEventListener("click", () => {
 function setBusy(b) {
   state.busy = b;
   sendBtn.classList.toggle("busy", b);
-  sendBtn.textContent = b ? "■" : "↑";
-  dot.classList.toggle("busy", b);
   updatePulse();
+  updateSend();
 }
-// The typing indicator shows while the turn is busy and working — before the
-// first token, while thinking, and while any tool runs. It hides only once the
-// FINAL answer is streaming (text present, no tool still running), where the
-// streaming text is itself the activity. It sits at the end of the list.
-let pulseEl = null;
+// Activity indicator: keep the turn's activity feed visible while working.
 let tickTimer = null;
 function updatePulse() {
-  // A mid-turn preamble ("Let me read the README…") followed by running tools must
-  // keep pulsing, so a running tool always forces the pulse on despite that text.
   const tn = state.turn;
   const toolRunning = tn && [...tn.tools.values()].some(t => t.status === "running");
   const last = tn && tn.order[tn.order.length - 1];
   const hasReply = !!(last && last.kind === "text" && last.text);
   const show = state.busy && (toolRunning || !hasReply);
-  if (show) {
-    if (!pulseEl) {
-      pulseEl = document.createElement("div");
-      pulseEl.className = "msg assistant pulse-row";
-      pulseEl.innerHTML = `<div class="body"><div class="pulse"><i></i><i></i><i></i></div></div>`;
-    }
-    messagesEl.appendChild(pulseEl); // move to end (after work items)
-    emptyEl.classList.add("hidden");
+  if (show && tn) {
+    ensureTurnInDom();
+    renderTurn(false);
     ensurePinned();
-  } else if (pulseEl) {
-    pulseEl.remove(); pulseEl = null;
   }
-  // elapsed counter: tick once a second while busy, feeding "Worked for Xs"
   if (state.busy && !tickTimer) {
-    tickTimer = setInterval(() => { if (state.turn) state.turn.ticks++; }, 1000);
+    tickTimer = setInterval(() => {
+      if (state.turn) {
+        state.turn.ticks++;
+        renderTurn(false);
+        if (state.turn.activityFeed) {
+          const scroll = state.turn.activityFeed.querySelector(".activity-scroll");
+          if (scroll) scrollActivityFeed(state.turn.activityFeed, scroll);
+        }
+        ensurePinned();
+      }
+    }, 1000);
   } else if (!state.busy && tickTimer) {
     clearInterval(tickTimer); tickTimer = null;
   }
@@ -1014,22 +1702,21 @@ function updatePulse() {
 // =================== sessions ===================
 function setSessions(list) {
   state.sessions = list || [];
-  renderSessions();
+  if (state.view === "workspaces") renderWorkspaceList();
   // After a server restart, auto-created sessions come back with new ids, so a
   // still-selected old id is now dead — requesting its history returns found:false
   // and the view stays stuck on the welcome page. Drop the dead id and fall through
   // to auto-select a live session instead of sitting on "new session" forever.
   if (state.activeId && !state.sessions.some((s) => s.id === state.activeId)) {
     state.activeId = "";
+    if (state.view === "chat") showWorkspaces();
   }
-  if (!state.activeId && state.sessions.length) {
-    select(state.sessions[0].id);
-  }
+  updateChrome();
 }
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
-  renderSessions();
+  if (state.view === "workspaces") renderWorkspaceList();
 }
 // Track a session's running state from live turn_started/turn_stopped (broadcast
 // for every session) so the drawer dot and busy-on-open stay correct even for
@@ -1038,8 +1725,8 @@ function setSessionState(id, st) {
   const ses = state.sessions.find(x => x.id === id);
   if (!ses || ses.state === st) return;
   ses.state = st;
-  renderSessions();
-  if (id === state.activeId) dot.className = st === "busy" ? "busy" : (st === "error" ? "error" : "");
+  if (state.view === "workspaces") renderWorkspaceList();
+  if (id === state.activeId && state.view === "chat") updateChrome();
 }
 // Session titles come from the transcript's first user line, which is often
 // command/hook boilerplate (/goal stop-hooks, continuation summaries, local-
@@ -1067,82 +1754,417 @@ function closeRowMenu() { const m = $("rowMenu"); if (m) m.remove(); }
 function rowMenu(s, anchor) {
   closeRowMenu();
   const m = document.createElement("div"); m.className = "row-menu"; m.id = "rowMenu";
-  const rename = document.createElement("div"); rename.className = "row-mi"; rename.textContent = "Rename";
-  rename.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  const add = (label, cls, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi" + (cls ? " " + cls : "");
+    el.textContent = label;
+    el.addEventListener("click", (e) => { e.stopPropagation(); closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", "", () => {
     const n = prompt("Rename session", cleanTitle(s.name) || "");
     if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
   });
-  const del = document.createElement("div"); del.className = "row-mi danger"; del.textContent = "Delete";
-  del.addEventListener("click", (e) => {
-    e.stopPropagation(); closeRowMenu();
+  add("Copy path", "", () => { copyText(s.cwd || ""); toast("Path copied"); haptic("light"); });
+  add(s.pinned ? "Unpin" : "Pin", "", () => {
+    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
+    haptic("medium");
+  });
+  add(s.archived ? "Unarchive" : "Archive", "", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+    haptic("medium");
+  });
+  add("Delete", "danger", () => {
     if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
   });
-  m.appendChild(rename); m.appendChild(del);
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${Math.max(8, Math.min(r.right - 150, window.innerWidth - 158))}px`;
 }
+
+function showRowContext(s) {
+  closeRowMenu();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const add = (label, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi";
+    el.textContent = label;
+    el.addEventListener("click", () => { closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Rename", () => {
+    const n = prompt("Rename session", cleanTitle(s.name) || "");
+    if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
+  });
+  add("Copy path", () => { copyText(s.cwd || ""); toast("Path copied"); });
+  add(s.pinned ? "Unpin" : "Pin", () => send({ op: "pin", sessionId: s.id, pinned: !s.pinned }));
+  add(s.archived ? "Unarchive" : "Archive", () => {
+    if (s.archived) send({ op: "unarchive", sessionId: s.id });
+    else send({ op: "archive", sessionId: s.id });
+  });
+  add("Delete", () => {
+    if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
+  });
+  document.body.appendChild(m);
+}
 document.addEventListener("click", closeRowMenu);
 
-function renderSessions() {
-  const q = $("search").value.toLowerCase();
-  const list = $("sessionList");
-  list.innerHTML = "";
-  // Group by project (cwd) — a cross-project list mixing synapse/dcc/llm-proxy in
-  // random order was the "散乱" pile. Groups are ordered by their most-recent
-  // session; rows within a group are most-recent-first.
-  const f = state.sessions
-    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q));
-  const groups = new Map();
-  for (const s of f) {
-    const proj = (s.cwd || "").split("/").filter(Boolean).pop() || "other";
-    if (!groups.has(proj)) groups.set(proj, []);
-    groups.get(proj).push(s);
+function normalizePath(p) {
+  if (!p) return "";
+  let s = String(p).trim();
+  while (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+function workspacePaths() {
+  const paths = new Set();
+  // Every session belongs to a workspace — derived from session cwd first.
+  for (const s of state.sessions) {
+    const n = normalizePath(s.cwd);
+    if (n) paths.add(n);
   }
-  const ordered = [...groups.entries()]
-    .map(([proj, items]) => {
-      items.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
-      return { proj, items, recent: items[0] ? (items[0].started_at || 0) : 0 };
-    })
-    .sort((a, b) => b.recent - a.recent);
-  for (const g of ordered) {
-    const collapsed = collapsedGroups.has(g.proj);
-    const h = document.createElement("div");
-    h.className = "s-group" + (collapsed ? " collapsed" : "");
-    h.innerHTML = `<span class="chev">▸</span><span class="s-group-name">${escapeHtml(g.proj)}</span><span class="s-group-n">${g.items.length}</span>`;
-    const body = document.createElement("div");
-    body.className = "s-group-items";
-    for (const s of g.items) {
-      const it = document.createElement("div");
-      it.className = "s-item" + (s.id === state.activeId ? " active" : "");
-      // Single tight line: [status only if busy/error] title …… time.
-      // Idle is the default state, so it gets NO dot (a dot on every row was just noise).
-      const st = s.state === "busy" ? `<span class="st busy"></span>`
-               : s.state === "error" ? `<span class="st error"></span>` : "";
-      it.innerHTML =
-        st +
-        `<span class="label">${escapeHtml(cleanTitle(s.name))}</span>` +
-        `<span class="when">${escapeHtml(relTime(s.started_at || 0))}</span>` +
-        `<button class="s-more" aria-label="Session actions">⋯</button>`;
-      it.addEventListener("click", () => select(s.id));
-      it.querySelector(".s-more").addEventListener("click", (e) => { e.stopPropagation(); rowMenu(s, e.currentTarget); });
-      body.appendChild(it);
+  // Also show registered workspaces that have no sessions yet.
+  for (const p of state.cwds || []) {
+    const n = normalizePath(p);
+    if (n) paths.add(n);
+  }
+  const latest = (path) => {
+    let t = 0;
+    for (const s of state.sessions) {
+      if (normalizePath(s.cwd) !== path) continue;
+      t = Math.max(t, s.started_at || 0);
     }
-    // Header toggles its group. Track folded projects in a Set so a re-render
-    // (WS update, search) doesn't pop everything back open.
-    h.addEventListener("click", () => {
-      const nowCollapsed = h.classList.toggle("collapsed");
-      if (nowCollapsed) collapsedGroups.add(g.proj); else collapsedGroups.delete(g.proj);
-    });
-    list.appendChild(h);
-    list.appendChild(body);
+    return t;
+  };
+  return [...paths].sort((a, b) => {
+    const d = latest(b) - latest(a);
+    if (d) return d;
+    return basename(a).localeCompare(basename(b));
+  });
+}
+
+function renderSessionDrawerBody(path) {
+  const body = $("drawerBody");
+  if (!body || normalizePath(state.sessionDrawerWorkspace) !== normalizePath(path)) return;
+  body.innerHTML = "";
+
+  const pending = normalizePath(state.pendingCwd);
+  if (state.creating && pending === normalizePath(path)) {
+    const row = document.createElement("div");
+    row.className = "sess-row creating";
+    row.innerHTML =
+      sessionIconHtml({ state: "busy" }) +
+      `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
+      `<div class="sess-sub working">Working</div></div>`;
+    body.appendChild(row);
+  }
+
+  const sessions = filteredSessions(path);
+  if (!sessions.length && !state.creating) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = "No sessions yet";
+    body.appendChild(hint);
+  } else {
+    for (const s of sessions) appendSessionRow(body, s);
   }
 }
 
-// Project groups the user has folded in the drawer (survives re-renders).
-const collapsedGroups = new Set();
+function openSessionDrawer(path) {
+  const norm = normalizePath(path);
+  if (!norm) return;
+  state.sessionDrawerWorkspace = norm;
+  $("drawerTitle").textContent = basename(norm);
+  renderSessionDrawerBody(norm);
+  $("drawerMask").classList.add("show");
+  $("sessionDrawer").classList.add("show");
+  $("sessionDrawer").setAttribute("aria-hidden", "false");
+  haptic("light");
+}
+
+function closeSessionDrawer() {
+  state.sessionDrawerWorkspace = null;
+  $("drawerMask").classList.remove("show");
+  $("sessionDrawer").classList.remove("show");
+  $("sessionDrawer").setAttribute("aria-hidden", "true");
+}
+
+function filteredSessions(workspacePath) {
+  const q = (state.searchQuery || "").toLowerCase();
+  return state.sessions
+    .filter(s => state.showArchived ? s.archived : !s.archived)
+    .filter(s => !workspacePath || normalizePath(s.cwd) === workspacePath)
+    .filter(s => {
+      if (!q) return true;
+      const title = cleanTitle(s.name).toLowerCase();
+      const ws = basename(s.cwd || "").toLowerCase();
+      return title.includes(q) || ws.includes(q);
+    })
+    .sort((a, b) => {
+      if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+      return (b.started_at || 0) - (a.started_at || 0);
+    });
+}
+
+const SPARK_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l1.6 3.8L17.5 8l-3.9 1.7L12 13.5 10.4 9.7 6.5 8l3.9-1.7L12 2.5z" fill="currentColor"/><circle cx="5.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="18.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="12" cy="21" r="1.5" fill="currentColor" opacity=".75"/></svg>`;
+const ARCHIVE_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12v10a1 1 0 01-1 1H5a1 1 0 01-1-1V6z" stroke="currentColor" stroke-width="1.4"/><path d="M3 6h14M8 6V4h4v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 10h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+
+function formatNum(n) {
+  return (n || 0).toLocaleString("en-US");
+}
+
+function sessionIconHtml(s) {
+  if (s.state === "busy") return `<span class="sess-icon spark">${SPARK_SVG}</span>`;
+  return `<span class="sess-icon dot"></span>`;
+}
+
+function appendSessionRow(parent, s) {
+  const wrap = document.createElement("div");
+  wrap.className = "sess-row-wrap";
+  const row = document.createElement("div");
+  row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
+  const sub = sessionSubtitle(s);
+  const subHtml = sub.html
+    ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
+    : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
+  const pin = s.pinned ? `<span class="sess-pin" aria-label="Pinned">★</span>` : "";
+  row.innerHTML =
+    sessionIconHtml(s) +
+    `<div class="sess-body">` +
+      `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
+      subHtml +
+    `</div>` +
+    `<button type="button" class="sess-archive-btn" aria-label="Archive">${ARCHIVE_SVG}</button>`;
+  wrap.appendChild(row);
+  parent.appendChild(wrap);
+  row.addEventListener("click", (e) => {
+    if (e.target.closest(".sess-archive-btn")) return;
+    select(s.id);
+  });
+  bindArchiveBtn(row.querySelector(".sess-archive-btn"), s);
+  bindLongPress(row, s);
+}
+
+function renderWorkspaceList() {
+  const list = $("workspaceList");
+  if (!list) return;
+  list.innerHTML = "";
+  const q = (state.searchQuery || "").toLowerCase();
+  const archivedAny = state.sessions.some(s => s.archived);
+  const archivedToggle = $("archivedToggle");
+  if (archivedToggle) {
+    archivedToggle.classList.toggle("hidden", !archivedAny);
+    archivedToggle.textContent = state.showArchived ? "Hide archived" : "Show archived";
+  }
+
+  const paths = workspacePaths();
+  if (!paths.length && !q) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.innerHTML = `No workspaces yet<br><span class="empty-hint-sub">Tap + to add a workspace</span>`;
+    list.appendChild(hint);
+    return;
+  }
+
+  let any = false;
+  for (const path of paths) {
+    const label = basename(path);
+    const sessions = filteredSessions(path);
+    if (q) {
+      const labelMatch = label.toLowerCase().includes(q);
+      const sessionMatch = sessions.length > 0;
+      if (!labelMatch && !sessionMatch) continue;
+    }
+
+    any = true;
+    const count = sessions.length;
+    const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
+    const row = document.createElement("div");
+    row.className = "ws-row";
+    row.innerHTML =
+      `<span class="ws-name">${escapeHtml(label)}</span>` +
+      countHtml +
+      `<span class="ws-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+    row.title = path;
+    row.addEventListener("click", () => openSessionDrawer(path));
+    list.appendChild(row);
+  }
+
+  if (state.sessionDrawerWorkspace) renderSessionDrawerBody(state.sessionDrawerWorkspace);
+
+  if (!any && q) {
+    const hint = document.createElement("div");
+    hint.className = "empty-hint";
+    hint.textContent = "No matches";
+    list.appendChild(hint);
+  }
+}
+
+function openWorkspacePickerSheet(onPick) {
+  closeMenus();
+  const pick = onPick || ((path) => chooseCwd(path));
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+
+  const pathWrap = document.createElement("div");
+  pathWrap.className = "model-search-wrap";
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.className = "model-search";
+  inp.placeholder = "Workspace path, e.g. ~/code/foo";
+  inp.style.paddingLeft = "12px";
+  inp.autocomplete = "off";
+  pathWrap.appendChild(inp);
+  wrap.appendChild(pathWrap);
+
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+
+  const addSection = (title) => {
+    const h = document.createElement("div");
+    h.className = "model-section";
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
+  const render = (query) => {
+    list.innerHTML = "";
+    const q = (query || "").trim().toLowerCase();
+    const items = (state.cwds || []).filter((p) => {
+      const b = basename(p).toLowerCase();
+      return !q || b.includes(q) || String(p).toLowerCase().includes(q);
+    });
+    if (items.length) {
+      addSection("Workspaces");
+      for (const p of items) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "model-row";
+        row.innerHTML = `<span class="model-row-label">${escapeHtml(basename(p))}</span>`;
+        row.title = p;
+        row.addEventListener("click", () => { closeSheet(); pick(p); });
+        list.appendChild(row);
+      }
+    } else if (q) {
+      addSection("Workspaces");
+      const empty = document.createElement("div");
+      empty.className = "model-empty";
+      empty.textContent = "No workspaces match your search";
+      list.appendChild(empty);
+    }
+  };
+
+  inp.addEventListener("input", () => render(inp.value));
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const p = inp.value.trim();
+      if (p) { closeSheet(); pick(p); }
+    }
+  });
+  render("");
+  wrap.appendChild(list);
+
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Add workspace", wrap);
+  requestAnimationFrame(() => inp.focus());
+}
+
+function openAddWorkspace() {
+  openWorkspacePickerSheet((path) => {
+    const norm = normalizePath(path);
+    state.pendingCwd = norm;
+    send({ op: "register_project", path: norm });
+    renderWorkspaceList();
+  });
+}
+
+function diffSubtitle(s) {
+  const a = s.diff_adds || 0;
+  const d = s.diff_dels || 0;
+  if (!a && !d) return "";
+  let html = "";
+  if (a) html += `<span class="sess-diff add">+${formatNum(a)}</span>`;
+  if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${formatNum(d)}</span>`;
+  return html;
+}
+
+function sessionSubtitle(s) {
+  if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
+  if (s.state === "error") {
+    const diff = diffSubtitle(s);
+    const err = `<span class="fail-mark">✗</span> 1 Check Failed`;
+    const html = diff ? `${err} · ${diff}` : err;
+    return { text: "", cls: "error", html };
+  }
+  const diff = diffSubtitle(s);
+  const t = s.started_at || 0;
+  const time = t ? relTime(t) : "";
+  if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
+  if (diff) return { text: "", cls: "", html: diff };
+  if (!diff) return { text: "No Changes", cls: "muted", html: "" };
+  return { text: "", cls: "", html: "" };
+}
+
+let navFromPop = false;
+
+function showWorkspaces() {
+  state.view = "workspaces";
+  document.body.classList.remove("mode-chat");
+  document.body.classList.add("mode-workspaces");
+  closeSessionDrawer();
+  updateChrome();
+  renderWorkspaceList();
+}
+
+function showChat(pushHistory) {
+  state.view = "chat";
+  document.body.classList.remove("mode-workspaces");
+  document.body.classList.add("mode-chat");
+  updateChrome();
+  if (pushHistory !== false && !navFromPop) {
+    history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
+  }
+  requestAnimationFrame(() => { if (inputEl) inputEl.focus(); });
+}
+
+function updateChrome() {
+  const q = state.searchQuery || "";
+  if (searchInput && searchInput.value !== q) searchInput.value = q;
+  searchWrap.classList.toggle("hidden", !state.searchOpen);
+  const searchBtn = $("searchBtn");
+  if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
+  if (state.view === "workspaces") {
+    pageTitle.textContent = "Workspaces";
+    chatTitle.hidden = true;
+  } else {
+    const s = state.sessions.find(x => x.id === state.activeId);
+    chatTitle.textContent = s ? cleanTitle(s.name) : "New session";
+    chatTitle.hidden = false;
+    if (inputEl) inputEl.placeholder = "Follow up…";
+  }
+}
+
+function bindArchiveBtn(btn, s) {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    send({ op: "archive", sessionId: s.id });
+    haptic("medium");
+  });
+}
+
+function bindLongPress(row, s) {
+  let timer = null;
+  const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  row.addEventListener("touchstart", () => {
+    timer = setTimeout(() => { haptic("medium"); showRowContext(s); }, 480);
+  }, { passive: true });
+  row.addEventListener("touchend", clear);
+  row.addEventListener("touchmove", clear);
+  row.addEventListener("touchcancel", clear);
+}
 
 // Relative time for the session list. Runs in the browser, so Date is available
 // (the workflow-sandbox caveat elsewhere doesn't apply).
@@ -1159,55 +2181,67 @@ function select(id) {
   state.activeId = id;
   const s = state.sessions.find(x => x.id === id);
   if (s) {
-    titleName.textContent = cleanTitle(s.name);
-    subText.textContent = s.model ? labelForModel(s.model) : (s.cwd || "session");
-    dot.className = s.state === "busy" ? "busy" : (s.state === "error" ? "error" : "");
-    // Composer pills + empty-state subtitle reflect the active session. Both pills
-    // derive from currentCwd()/currentModelId() — the SAME source the pickers use to
-    // mark a row selected — so the label and the checkmark can never drift apart.
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
+  if (!NATIVE_SHELL) closeSessionDrawer();
   clearMessages();
   state.turn = null;
-  // Seed busy from the session's current state so opening a session whose turn
-  // is already running (started on another device) shows the replying status at
-  // once; the live turn_stopped clears it.
+  state.loadingHistory = true;
+  beginHistoryLoad();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
-  closeDrawer();
+  if (!NATIVE_SHELL) {
+    showChat();
+  } else {
+    state.view = "chat";
+    document.body.classList.add("mode-chat");
+    updateChrome();
+    notifyNative("sessionOpened", { sessionId: id, title: s ? cleanTitle(s.name) : "" });
+  }
+  haptic("light");
 }
 
-// =================== composer ===================
+function openSession(id) {
+  if (!id) return;
+  select(id);
+}
 function autoGrow() {
   inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
   updateSend();
 }
 function updateSend() {
   const has = inputEl.value.trim().length > 0;
-  if (state.busy) { sendBtn.className = "busy"; sendBtn.textContent = "■"; }
-  else { sendBtn.className = has ? "active" : ""; sendBtn.textContent = "↑"; }
+  sendBtn.classList.remove("active", "busy");
+  if (state.busy) {
+    sendBtn.classList.add("busy");
+    sendBtn.disabled = false;
+  } else if (has) {
+    sendBtn.classList.add("active");
+    sendBtn.disabled = false;
+  } else {
+    sendBtn.disabled = true;
+  }
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && window.__SYNAPSE__) {
-    // mobile uses the button; on desktop Enter sends
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault(); doSend();
   }
 });
 sendBtn.addEventListener("click", () => {
-  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); return; }
+  if (state.busy) { send({ op: "stop", sessionId: state.activeId }); haptic("medium"); return; }
   doSend();
 });
 function doSend() {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = ""; autoGrow();
+  haptic("light");
   if (!state.activeId) {
-    // No session yet: start one (in the selected model/repo) and send the
-    // message into it once it's created. Type-and-send always works.
     state.pendingSend = text;
+    if (state.view !== "chat") showChat(false);
     newSession();
     return;
   }
@@ -1217,23 +2251,68 @@ function doSend() {
   send({ op: "send", sessionId: state.activeId, content: text });
 }
 
-// =================== drawer ===================
-$("drawerBtn").addEventListener("click", openDrawer);
-$("drawerClose").addEventListener("click", closeDrawer);
-$("drawerMask").addEventListener("click", closeDrawer);
-$("newBtn").addEventListener("click", newSession);
-$("newSessionBtn").addEventListener("click", newSession);
-$("refreshBtn").addEventListener("click", () => send({ op: "refresh" }));
-$("search").addEventListener("input", renderSessions);
-function openDrawer() { $("drawer").classList.add("show"); $("drawerMask").classList.add("show"); }
-function closeDrawer() { $("drawer").classList.remove("show"); $("drawerMask").classList.remove("show"); }
+// =================== navigation ===================
+$("backBtn").addEventListener("click", () => {
+  haptic("light");
+  if (state.view === "chat") {
+    if (history.state && history.state.synapse === "chat") history.back();
+    else showWorkspaces();
+  }
+});
+window.addEventListener("popstate", () => {
+  if (state.view === "chat") {
+    navFromPop = true;
+    showWorkspaces();
+    navFromPop = false;
+  }
+});
+$("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddWorkspace(); });
+$("drawerClose").addEventListener("click", () => { haptic("light"); closeSessionDrawer(); });
+$("drawerMask").addEventListener("click", closeSessionDrawer);
+$("searchBtn").addEventListener("click", () => {
+  haptic("light");
+  state.searchOpen = !state.searchOpen;
+  updateChrome();
+  if (state.searchOpen) searchInput.focus();
+});
+searchInput.addEventListener("input", () => {
+  state.searchQuery = searchInput.value.trim();
+  if (state.view === "workspaces") renderWorkspaceList();
+});
+$("archivedToggle").addEventListener("click", () => {
+  state.showArchived = !state.showArchived;
+  renderWorkspaceList();
+});
+
+function startNewDraft(cwd) {
+  if (state.creating) return;
+  state.activeId = "";
+  state.pendingSend = null;
+  if (cwd !== undefined) state.pendingCwd = normalizePath(cwd);
+  clearMessages();
+  state.turn = null;
+  setBusy(false);
+  syncModelLabel();
+  syncLocalLabel();
+  const es = $("emptySub");
+  if (es) {
+    const c = state.pendingCwd || workspacePaths()[0];
+    es.textContent = c ? basename(c) : "";
+  }
+  showChat();
+  haptic("light");
+}
+
 function newSession() {
+  if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
-  if (state.pendingCwd) opts.cwd = state.pendingCwd;
+  const cwd = state.pendingCwd || workspacePaths()[0];
+  if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
+  state.creating = true;
+  if (state.view === "workspaces") renderWorkspaceList();
   send({ op: "create", opts });
-  closeDrawer();
 }
 
 // suggestions
@@ -1266,15 +2345,17 @@ function currentCwd() {
   return (s ? s.cwd : state.pendingCwd) || "";
 }
 function syncModelLabel() {
-  const ml = $("modelLabel"); if (ml) ml.textContent = labelForModel(currentModelId());
+  const ml = $("modelLabel");
+  const id = currentModelId();
+  if (ml) ml.textContent = id ? labelForModel(id) : "Auto";
 }
 function syncLocalLabel() {
   const ll = $("localLabel"); const c = currentCwd();
   if (ll) ll.textContent = c ? basename(c) : "Local";
 }
 function closeMenus() {
-  $("modelMenu").classList.remove("show");
   $("localMenu").classList.remove("show");
+  const am = $("attachMenu"); if (am) am.classList.remove("show");
   const pm = $("permMenu"); if (pm) pm.classList.remove("show");
 }
 // Render `items` ([{id,label,title?}]) into menu `id`, marking `cur` selected.
@@ -1302,41 +2383,44 @@ function toggleMenu(id, build) {
 }
 function chooseModel(id) {
   closeMenus();
+  closeSheet();
   if (state.activeId) {
     send({ op: "set_model", sessionId: state.activeId, model: id });
     const s = state.sessions.find(x => x.id === state.activeId);
-    if (s) s.model = id;                 // optimistic; the broadcast confirms
+    if (s) s.model = id;
   } else {
     state.pendingModel = id;
   }
   syncModelLabel();
+  haptic("light");
 }
 function chooseCwd(path) {
   closeMenus();
-  state.pendingCwd = path;               // newSession() reads this
+  state.pendingCwd = path;
   syncLocalLabel();
-  newSession();                          // selecting a repo starts a session there
+  startNewDraft();
 }
 $("modelCtl").addEventListener("click", (e) => {
   e.stopPropagation();
-  toggleMenu("modelMenu", () => openMenu("modelMenu",
-    state.models.map(m => ({ id: m.id, label: m.label })),
-    currentModelId(), chooseModel, "No models configured"));
+  const open = $("bottomSheet").classList.contains("show") && $("sheetTitle").textContent === "Model";
+  if (open) closeSheet();
+  else openModelSheet();
 });
 // The project menu always offers a free-text path (to start a session in a repo
 // not in the discovered list), then the discovered git repos. openMenu() bails
 // with a toast on an empty list — which would hide the input — so this one is
 // bespoke. The input and the rows both lead to chooseCwd(), same as a pick.
-function openLocalMenu() {
+function openLocalMenu(onPick) {
   closeMenus();
   const menu = $("localMenu");
   menu.innerHTML = "";
+  const pick = onPick || ((path) => chooseCwd(path));
   const inp = document.createElement("input");
   inp.className = "path-input";
   inp.placeholder = "输入路径，如 ~/code/foo";
   inp.addEventListener("click", (e) => e.stopPropagation());
   inp.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { const p = inp.value.trim(); if (p) chooseCwd(p); }
+    if (e.key === "Enter") { const p = inp.value.trim(); if (p) pick(p); }
   });
   menu.appendChild(inp);
   const cur = currentCwd();
@@ -1345,7 +2429,7 @@ function openLocalMenu() {
     row.className = "model-item" + (p === cur ? " sel" : "");
     row.innerHTML = `<span>${escapeHtml(basename(p))}</span>`;
     row.title = p;
-    row.addEventListener("click", (e) => { e.stopPropagation(); chooseCwd(p); });
+    row.addEventListener("click", (e) => { e.stopPropagation(); pick(p); });
     menu.appendChild(row);
   }
   menu.classList.add("show");
@@ -1353,10 +2437,7 @@ function openLocalMenu() {
   if (sel) sel.scrollIntoView({ block: "nearest" });
   inp.focus();
 }
-$("localCtl").addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleMenu("localMenu", openLocalMenu);
-});
+// local picker opened from attach (+) menu
 document.addEventListener("click", closeMenus);
 
 // =================== toast ===================
@@ -1389,9 +2470,110 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
-// Dev/debug hooks: expose the inbound dispatcher + state for inspection. Harmless
-// in production; lets tooling drive synthetic frames without a live API.
-initPermPill();
-window.__synapse = { handle, handleEvent, state };
-connect();
+if (NATIVE_SHELL) {
+  document.body.classList.add("mode-native-shell", "mode-chat");
+}
+initAttachMenu();
+initComposerAntiAutofill();
+initKeyboardInset();
+initPullRefresh();
+initSheetDrag();
+if (creds()) hideConnectOverlay();
+updateSend();
+$("sheetClose").addEventListener("click", closeSheet);
+$("sheetMask").addEventListener("click", closeSheet);
+$("pairConnect").addEventListener("click", pairFromForm);
+$("pairManualConnect").addEventListener("click", pairFromForm);
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
+if (!NATIVE_SHELL) connect();
+else if (creds()) connect();
+
+function initComposerAntiAutofill() {
+  if (!inputEl) return;
+  const unlock = () => { inputEl.readOnly = false; };
+  inputEl.addEventListener("touchstart", unlock, { passive: true });
+  inputEl.addEventListener("focus", unlock);
+}
+
+function initKeyboardInset() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const apply = () => {
+    const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty("--kb", kb > 0 ? `${kb}px` : "0px");
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  apply();
+}
+
+function initPullRefresh() {
+  if (NATIVE_SHELL) return;
+  const list = $("workspaceList");
+  const indicator = $("pullRefresh");
+  let startY = 0, pulling = false;
+  list.addEventListener("touchstart", (e) => {
+    if (list.scrollTop > 0 || state.view !== "workspaces") return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+  }, { passive: true });
+  list.addEventListener("touchmove", (e) => {
+    if (!pulling) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 0 && list.scrollTop <= 0) {
+      indicator.classList.toggle("pulling", dy > 40);
+      indicator.querySelector(".pull-label").textContent = dy > 72 ? "Release to refresh" : "Pull to refresh";
+    }
+  }, { passive: true });
+  const end = () => {
+    if (!pulling) return;
+    pulling = false;
+    if (indicator.classList.contains("pulling")) {
+      indicator.classList.remove("pulling");
+      indicator.classList.add("refreshing");
+      send({ op: "refresh" });
+      send({ op: "refresh_cwds" });
+      haptic("light");
+      setTimeout(() => indicator.classList.remove("refreshing"), 800);
+    } else {
+      indicator.classList.remove("pulling");
+    }
+  };
+  list.addEventListener("touchend", end);
+  list.addEventListener("touchcancel", end);
+}
+
+function initSheetDrag() {
+  const sheet = $("bottomSheet");
+  const handle = $("sheetHandle");
+  let startY = 0, curY = 0, dragging = false;
+  const onStart = (y) => { startY = y; dragging = true; sheet.classList.add("dragging"); };
+  const onMove = (y) => {
+    if (!dragging) return;
+    curY = Math.max(0, y - startY);
+    sheet.style.transform = `translateY(${curY}px)`;
+    const op = Math.max(0, 1 - curY / 280);
+    $("sheetMask").style.opacity = String(op * 0.55);
+  };
+  const onEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove("dragging");
+    $("sheetMask").style.opacity = "";
+    if (curY > 100) closeSheet();
+    else sheet.style.transform = "";
+    curY = 0;
+  };
+  handle.addEventListener("touchstart", (e) => onStart(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchmove", (e) => onMove(e.touches[0].clientY), { passive: true });
+  handle.addEventListener("touchend", onEnd);
+  sheet.addEventListener("touchstart", (e) => {
+    if (e.target === handle) return;
+    if (sheet.scrollTop <= 0) onStart(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (dragging) onMove(e.touches[0].clientY);
+  }, { passive: true });
+  sheet.addEventListener("touchend", onEnd);
+}
 })();

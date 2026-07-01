@@ -1,0 +1,146 @@
+# Deploy the chat web bundle (crates/app/web) to a stable preview URL.
+#
+# Default target: GitHub Pages → https://<owner>.github.io/<repo>/
+# One-time setup: Repo Settings → Pages → Build and deployment → Source: GitHub Actions
+#
+# Optional SSH deploy: add repository secrets
+#   DEPLOY_HOST     e.g. 203.0.113.10
+#   DEPLOY_USER     e.g. ubuntu
+#   DEPLOY_SSH_KEY  private key (ed25519)
+#   DEPLOY_PATH     e.g. /var/www/synapse-preview
+name: Deploy Web Preview
+
+on:
+  push:
+    branches: [master, main, "cursor/**"]
+    paths:
+      - "crates/app/web/**"
+      - ".github/workflows/deploy-web.yml"
+      - "scripts/deploy-web-ssh.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy-pages:
+    name: GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare static site
+        run: |
+          mkdir -p _site
+          cp -r crates/app/web/* _site/
+          cat > _site/deploy-info.txt <<EOF
+          branch=${{ github.ref_name }}
+          sha=${{ github.sha }}
+          time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Print preview URL
+        run: |
+          echo "Preview URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "Open on phone: ${{ steps.deployment.outputs.page_url }}?host=127.0.0.1&port=4173&token=CODE"
+
+  deploy-ssh:
+    name: SSH (optional VPS)
+    runs-on: ubuntu-latest
+    needs: deploy-pages
+    if: ${{ secrets.DEPLOY_HOST != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rsync web bundle to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            crates/app/web/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+
+      - name: Reload nginx (if present)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            if command -v nginx >/dev/null 2>&1; then
+              sudo nginx -t && sudo systemctl reload nginx
+            fi
+            echo "Deployed to ${{ secrets.DEPLOY_PATH }}"
+
+  pr-comment:
+    name: PR preview link
+    runs-on: ubuntu-latest
+    needs: deploy-pages
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        with:
+          script: |
+            const url = process.env.PREVIEW_URL;
+            const body = [
+              "## Web preview deployed",
+              "",
+              `**Mobile / browser:** [${url}](${url})`,
+              "",
+              "UI only on Pages — point WebSocket at your server with query params:",
+              "`?host=YOUR_HOST&port=4173&token=YOUR_TOKEN`",
+              "",
+              `_Updated by workflow run ${context.runId}_`,
+            ].join("\n");
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.type === "Bot" && c.body.includes("Web preview deployed")
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

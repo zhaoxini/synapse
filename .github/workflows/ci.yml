@@ -94,3 +94,31 @@ jobs:
         with:
           name: synapse-app-ios-staticlib
           path: target/aarch64-apple-ios/release/libsynapse_app.a
+
+  web-ui:
+    name: Web UI verify (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Install web UI dev deps
+        working-directory: crates/app/web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: crates/app/web
+        run: npx playwright install chromium
+
+      - name: Start static server
+        working-directory: crates/app/web
+        run: python3 -m http.server 8765 &
+
+      - name: Run UI verification
+        working-directory: crates/app/web
+        run: node verify-ui.mjs

@@ -32,3 +32,5 @@ rcgen = "0.14"
 time = "0.3"
 qr2term = "0.3"
 which = "7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hostname = "0.4"

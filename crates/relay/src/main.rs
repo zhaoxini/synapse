@@ -1,17 +1,13 @@
-// Synapse relay — a public WebSocket bridge for internet-wide remote access to
-// a self-hosted Synapse server.
+// Synapse relay — account service + WebSocket bridge for remote access.
 //
 //   mobile app  --wss-->  relay  <--wss--  synapse-server (outbound only)
 //
-// The relay is a transparent forwarder: it never touches the claude CLI and
-// never interprets the app/server JSON frames. It only authenticates
-// (deviceId + token) and shuttles frames both ways, so the existing app/server
-// WS protocol is completely unchanged.
-//
-// Roles:
-//   * Uplink   GET /uplink?deviceId=<ID>&token=<T>   (server -> relay)
-//   * Downlink GET /connect?deviceId=<ID>&token=<T>  (app -> relay)
+// The relay stores users/devices in SQLite, exposes a REST API for login and
+// device discovery, and shuttles WS frames transparently.
 
+mod api;
+mod auth;
+mod db;
 mod registry;
 
 use anyhow::{Context, Result};
@@ -22,44 +18,54 @@ use axum::{
     },
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use clap::Parser;
+use db::Db;
 use futures_util::{SinkExt, StreamExt};
 use registry::Registry;
 use serde::Deserialize;
 use serde_json::json;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "synapse-relay",
     version,
-    about = "Public WebSocket relay for Synapse remote access"
+    about = "Synapse relay: accounts, device registry, and WebSocket bridge"
 )]
 struct Args {
     #[arg(short, long, default_value = "443")]
     port: u16,
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
-    /// PEM certificate chain for TLS (wss). Required for public use.
+    /// Public hostname shown to clients (for pairing URLs). Defaults to --host.
     #[arg(long)]
-    tls_cert: Option<std::path::PathBuf>,
-    /// PEM private key matching --tls-cert.
+    public_host: Option<String>,
+    /// Public port shown to clients (when behind a reverse proxy). Defaults to --port.
     #[arg(long)]
-    tls_key: Option<std::path::PathBuf>,
-    /// Optional relay-wide API token the uplink must present.
+    public_port: Option<u16>,
+    /// Public TLS flag shown to clients (when TLS terminates at a reverse proxy).
+    #[arg(long, default_value_t = false)]
+    public_tls: bool,
     #[arg(long)]
-    api_token: Option<String>,
+    tls_cert: Option<PathBuf>,
+    #[arg(long)]
+    tls_key: Option<PathBuf>,
+    /// SQLite database path.
+    #[arg(long, default_value = "synapse-relay.db")]
+    db: PathBuf,
     #[arg(long)]
     dev: bool,
 }
 
 #[derive(Clone)]
 pub struct AppState {
+    pub db: Arc<Db>,
     pub registry: Arc<Registry>,
-    pub api_token: Option<String>,
+    pub public_host: String,
+    pub public_port: u16,
+    pub tls: bool,
 }
 
 #[derive(Deserialize)]
@@ -81,24 +87,44 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let state = AppState {
-        registry: Arc::new(Registry::new()),
-        api_token: args.api_token.clone(),
+    let db = Arc::new(Db::open(&args.db)?);
+    let registry = Arc::new(Registry::new());
+    let tls = args.tls_cert.is_some();
+    let public_host = args
+        .public_host
+        .clone()
+        .unwrap_or_else(|| args.host.clone());
+    let public_port = args.public_port.unwrap_or(args.port);
+    let public_tls = args.public_tls || tls;
+
+    let ws_state = AppState {
+        db: db.clone(),
+        registry: registry.clone(),
+        public_host: public_host.clone(),
+        public_port,
+        tls: public_tls,
     };
 
-    let app = Router::new()
-        .route("/api/health", get(health))
+    let app = api::router()
         .route("/uplink", get(uplink))
         .route("/connect", get(connect))
-        .with_state(state.clone());
+        .with_state(ws_state);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
-    let scheme = if args.tls_cert.is_some() { "wss" } else { "ws" };
+    let scheme = if tls { "wss" } else { "ws" };
 
     println!("\n  Synapse relay is running.\n");
     println!("  Listen:        {scheme}://{addr}");
-    println!("  Server uplink: {scheme}://{addr}/uplink?deviceId=<ID>&token=<TOKEN>");
-    println!("  App connect:   {scheme}://{addr}/connect?deviceId=<ID>&token=<TOKEN>\n");
+    println!("  Public host:   {public_host}");
+    println!("  Database:      {}", args.db.display());
+    println!(
+        "  API:           {scheme}://{public_host}:{}/api/v1/...",
+        args.port
+    );
+    println!("  Server uplink: {scheme}://{public_host}/uplink?deviceId=<ID>&token=<DEVICE_TOKEN>");
+    println!(
+        "  App connect:   {scheme}://{public_host}/connect?deviceId=<ID>&token=<CONNECT_TOKEN>\n"
+    );
 
     if let (Some(cert), Some(key)) = (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         let cfg = load_tls(cert, key).await?;
@@ -124,17 +150,6 @@ async fn load_tls(
     Ok(axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem).await?)
 }
 
-async fn health(State(s): State<AppState>) -> impl IntoResponse {
-    axum::Json(json!({ "ok": true, "devices": s.registry.device_count().await }))
-}
-
-fn check_api(state: &AppState, q: &DeviceQ) -> bool {
-    match &state.api_token {
-        Some(t) => q.token.as_deref() == Some(t.as_str()),
-        None => true,
-    }
-}
-
 async fn uplink(
     State(s): State<AppState>,
     Query(q): Query<DeviceQ>,
@@ -144,25 +159,28 @@ async fn uplink(
         Some(d) if !d.is_empty() => d,
         _ => return axum::http::StatusCode::BAD_REQUEST.into_response(),
     };
-    if !check_api(&s, &q) {
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    let token = match q.token.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+    };
+    match api::verify_uplink_token(&s.db, &device_id, token) {
+        Ok(true) => {}
+        Ok(false) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+        Err(e) => {
+            tracing::error!("uplink auth db error: {e}");
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
-    ws.on_upgrade(move |socket| uplink_loop(s, device_id, q.token, socket))
+    ws.on_upgrade(move |socket| uplink_loop(s, device_id, socket))
 }
 
-/// Server uplink. Frames the server sends us are forwarded to the currently
-/// linked app; frames the app sends arrive via `server_tx`.
-async fn uplink_loop(state: AppState, device_id: String, token: Option<String>, socket: WebSocket) {
+async fn uplink_loop(state: AppState, device_id: String, socket: WebSocket) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (server_tx, mut server_rx) = mpsc::channel::<Message>(128);
 
-    let app_slot = state
-        .registry
-        .register(&device_id, token, server_tx.clone())
-        .await;
+    let app_slot = state.registry.register(&device_id, server_tx.clone()).await;
     tracing::info!(%device_id, "uplink registered");
 
-    // App -> server: drain `server_rx`, write to the server socket.
     let to_server = tokio::spawn(async move {
         while let Some(m) = server_rx.recv().await {
             if ws_tx.send(m).await.is_err() {
@@ -171,7 +189,6 @@ async fn uplink_loop(state: AppState, device_id: String, token: Option<String>, 
         }
     });
 
-    // Server -> app: read server-originated frames, deliver to the linked app.
     while let Some(Ok(msg)) = ws_rx.next().await {
         match msg {
             Message::Ping(p) => {
@@ -200,27 +217,32 @@ async fn connect(
         Some(d) if !d.is_empty() => d,
         _ => return axum::http::StatusCode::BAD_REQUEST.into_response(),
     };
-    if !check_api(&s, &q) {
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    let token = match q.token.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+    };
+    match api::verify_ws_token(&s.db, &device_id, token) {
+        Ok(true) => {}
+        Ok(false) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+        Err(e) => {
+            tracing::error!("connect auth db error: {e}");
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
-    ws.on_upgrade(move |socket| connect_loop(s, device_id, q.token, socket))
+    if !s.registry.is_online(&device_id).await {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    ws.on_upgrade(move |socket| connect_loop(s, device_id, socket))
 }
 
-/// App downlink. App frames go to the server via `server_tx`; server frames
-/// arrive via `to_app` (linked into the device's app slot).
-async fn connect_loop(
-    state: AppState,
-    device_id: String,
-    token: Option<String>,
-    socket: WebSocket,
-) {
-    let (server_tx, app_slot) = match state.registry.acquire(&device_id, token.as_deref()).await {
+async fn connect_loop(state: AppState, device_id: String, socket: WebSocket) {
+    let (server_tx, app_slot) = match state.registry.acquire(&device_id).await {
         Some(v) => v,
         None => {
             let (mut tx, _rx) = socket.split();
             let _ = tx
                 .send(Message::Text(
-                    json!({"type":"error","error":"device offline or invalid token"}).to_string(),
+                    json!({"type":"error","error":"device offline"}).to_string(),
                 ))
                 .await;
             return;
@@ -230,14 +252,12 @@ async fn connect_loop(
     let (mut app_tx, mut app_rx) = socket.split();
     let (to_app_tx, mut to_app_rx) = mpsc::channel::<Message>(128);
 
-    // Link this app into the device's app slot.
     {
         let mut slot = app_slot.lock().await;
         *slot = Some(to_app_tx.clone());
     }
     tracing::info!(%device_id, "app linked");
 
-    // server -> app
     let s1 = tokio::spawn(async move {
         while let Some(m) = to_app_rx.recv().await {
             if app_tx.send(m).await.is_err() {
@@ -246,7 +266,6 @@ async fn connect_loop(
         }
     });
 
-    // app -> server
     let slot = app_slot.clone();
     let s2 = tokio::spawn(async move {
         while let Some(Ok(msg)) = app_rx.next().await {
@@ -257,7 +276,6 @@ async fn connect_loop(
                 break;
             }
         }
-        // unlink
         let mut s = slot.lock().await;
         *s = None;
     });

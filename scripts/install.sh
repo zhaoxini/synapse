@@ -8,7 +8,7 @@
 #   curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 #
 # Pin a version:
-#   SYNAPSE_VERSION=v0.2.3 curl -fsSL https://zx0623.duckdns.org/install.sh | bash
+#   SYNAPSE_VERSION=v0.2.4 curl -fsSL https://zx0623.duckdns.org/install.sh | bash
 #
 # Auto-start after install:
 #   SYNAPSE_AUTO_START=1 curl -fsSL https://zx0623.duckdns.org/install.sh | bash
@@ -134,21 +134,17 @@ pick_install_dir() {
   echo "${HOME}/.local/bin"
 }
 
-# Fetch wrapper from mirror/GitHub, or write the embedded copy (works with curl | bash).
 prepare_wrapper() {
   local dest="$1"
   WRAPPER_FILE="${dest}/synapse-server-wrapper.sh"
 
-  # 1) sibling file (local checkout: scripts/install.sh + scripts/synapse-server-wrapper.sh)
-  local sibling
-  sibling="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/synapse-server-wrapper.sh" || true
+  sibling="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/synapse-server-wrapper.sh" 2>/dev/null || true
   if [ -n "${sibling}" ] && [ -f "${sibling}" ]; then
     cp "${sibling}" "${WRAPPER_FILE}"
     chmod 755 "${WRAPPER_FILE}"
     return 0
   fi
 
-  # 2) mirror static file
   if [ -n "${MIRROR}" ]; then
     if curl -fsSL "${MIRROR}/scripts/synapse-server-wrapper.sh" -o "${WRAPPER_FILE}" 2>/dev/null; then
       chmod 755 "${WRAPPER_FILE}"
@@ -156,7 +152,6 @@ prepare_wrapper() {
     fi
   fi
 
-  # 3) GitHub raw (may be slow/blocked in CN)
   if curl -fsSL \
     "https://raw.githubusercontent.com/${REPO}/master/scripts/synapse-server-wrapper.sh" \
     -o "${WRAPPER_FILE}" 2>/dev/null; then
@@ -164,7 +159,7 @@ prepare_wrapper() {
     return 0
   fi
 
-  die "could not fetch synapse-server-wrapper.sh (mirror ${MIRROR}/scripts/synapse-server-wrapper.sh)"
+  die "could not fetch synapse-server-wrapper.sh"
 }
 
 install_bins() {
@@ -222,7 +217,6 @@ main() {
   echo "Start server (background):  synapse-server"
   echo "Stop:                         synapse-server stop"
   echo "Pairing code:                 synapse-server pairing-code"
-  echo "Account / device info:        synapse-server status"
   echo ""
 
   if [ "${SYNAPSE_AUTO_START:-0}" = "1" ]; then

@@ -29,6 +29,12 @@ global Theme {
     out property <length> pad: 12px;
 }
 
+struct DeviceInfo {
+    id: string,
+    name: string,
+    online: bool,
+}
+
 struct SessionInfo {
     id: string,
     name: string,
@@ -52,6 +58,22 @@ struct MsgBlock {
     blockIndex: int,
 }
 
+component authFieldRect inherits Rectangle {
+    in-out property <string> placeholder;
+    in-out property <string> value;
+    callback edited();
+    height: 50px;
+    background: Theme.bgElev;
+    border-radius: Theme.radiusSm;
+    border-width: 1px;
+    border-color: Theme.border;
+    LineEdit {
+        placeholder-text: root.placeholder;
+        text: root.value;
+        edited => { root.value = self.text; root.edited(); }
+    }
+}
+
 export component App inherits Window {
     title: "Synapse";
     preferred-width: 390px;
@@ -59,6 +81,16 @@ export component App inherits Window {
     background: Theme.bg;
 
     in-out property <string> view: "pairing";
+    in-out property <string> pairingSubView: "auth";
+    in-out property <string> relayUrl: "https://zx0623.duckdns.org";
+    in-out property <string> authEmail: "";
+    in-out property <string> authPassword: "";
+    in-out property <string> authName: "";
+    in-out property <bool> isRegister: false;
+    in-out property <string> userEmail: "";
+    in-out property <[DeviceInfo]> accountDevices: [];
+    in-out property <string> pairingCode: "";
+    in-out property <bool> loadingDevices: false;
     in-out property <bool> drawerOpen: false;
     in-out property <string> pairingHost: "";
     in-out property <string> pairingPort: "";
@@ -96,6 +128,12 @@ export component App inherits Window {
     // keyboard-frame observer so the composer rides above the on-screen keyboard.
     in-out property <length> keyboardInset: 0px;
 
+    callback authSubmit();
+    callback authToggleMode();
+    callback refreshDevices();
+    callback selectDevice(string);
+    callback claimPairingCode();
+    callback signOut();
     callback pairClicked(string);
     callback connectClicked();
     callback sendClicked(string);
@@ -133,74 +171,151 @@ export component App inherits Window {
                 }
             }
             Text { text: "Synapse"; font-size: 26px; font-weight: 800; color: Theme.text; horizontal-alignment: center; }
-            Text {
-                text: "Scan the QR code on your computer's\nSynapse server, or enter the pairing code.";
-                font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
-            }
 
-            // ===== Primary entry: pairing code / link =====
-            Rectangle {
-                height: 56px;
-                background: Theme.bgElev;
-                border-radius: Theme.radiusSm;
-                border-width: 1px;
-                border-color: Theme.border;
-                LineEdit {
-                    placeholder-text: "Pairing code or synapse:// link";
-                    text: root.pairLinkText;
-                    edited => { root.pairLinkText = self.text; }
-                    accepted => { root.pairClicked(root.pairLinkText); }
-                }
-            }
-            Rectangle {
-                height: 52px;
-                border-radius: Theme.radiusSm;
-                background: root.connecting ? Theme.accentDim : Theme.accent;
-                TouchArea { clicked => { root.pairClicked(root.pairLinkText); } }
+            if root.pairingSubView == "auth" : VerticalLayout {
+                spacing: 12px;
                 Text {
-                    text: root.connecting ? "Connecting…" : "Connect";
-                    color: #ffffff; font-weight: 700; font-size: 16px;
-                    horizontal-alignment: center; vertical-alignment: center;
+                    text: root.isRegister ? "Create your Synapse account" : "Sign in to your account";
+                    font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
                 }
-            }
-            // Paste-from-clipboard helper (scan QR with system camera, then tap here)
-            if root.clipboardHasLink : Rectangle {
-                height: 40px;
-                border-radius: Theme.radiusSm;
-                background: Theme.bgElev2;
-                TouchArea { clicked => { root.pasteClicked(); } }
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 6px;
-                    Text { text: "📋"; font-size: 14px; vertical-alignment: center; }
+                authFieldRect {
+                    placeholder: "https://zx0623.duckdns.org";
+                    value: root.relayUrl;
+                    edited => { root.relayUrl = self.value; }
+                }
+                authFieldRect {
+                    placeholder: "you@example.com";
+                    value: root.authEmail;
+                    edited => { root.authEmail = self.value; }
+                }
+                authFieldRect {
+                    placeholder: "Password";
+                    value: root.authPassword;
+                    edited => { root.authPassword = self.value; }
+                }
+                if root.isRegister : authFieldRect {
+                    placeholder: "Your name";
+                    value: root.authName;
+                    edited => { root.authName = self.value; }
+                }
+                Rectangle {
+                    height: 52px;
+                    border-radius: Theme.radiusSm;
+                    background: root.connecting ? Theme.accentDim : Theme.accent;
+                    TouchArea { clicked => { root.authSubmit(); } }
                     Text {
-                        text: "Paste link from clipboard";
-                        color: Theme.text; font-size: 13px; font-weight: 600;
-                        vertical-alignment: center;
+                        text: root.connecting ? "Please wait…" : (root.isRegister ? "Create account" : "Sign in");
+                        color: #ffffff; font-weight: 700; font-size: 16px;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 40px;
+                    TouchArea { clicked => { root.authToggleMode(); } }
+                    Text {
+                        text: root.isRegister ? "Already have an account? Sign in" : "New here? Create an account";
+                        color: Theme.blue; font-size: 13px; font-weight: 600;
+                        horizontal-alignment: center; vertical-alignment: center;
                     }
                 }
             }
-            Text { text: root.pairingError; color: Theme.danger; font-size: 13px; horizontal-alignment: center; }
 
-            // Hint card
-            Rectangle {
-                border-radius: Theme.radiusSm;
-                background: Theme.bgElev;
-                border-width: 1px;
-                border-color: Theme.border;
-                height: hintCol.preferred-height + 28px;
-                hintCol := VerticalLayout {
-                    padding: 14px; spacing: 6px;
-                    HorizontalLayout { spacing: 8px;
-                        Text { text: "📱"; font-size: 16px; vertical-alignment: center; }
-                        Text { text: "How to pair"; font-size: 14px; font-weight: 700; color: Theme.text; vertical-alignment: center; }
-                    }
+            if root.pairingSubView == "devices" : VerticalLayout {
+                spacing: 12px;
+                Text {
+                    text: "Signed in as " + root.userEmail;
+                    font-size: 13px; color: Theme.textDim; horizontal-alignment: center;
+                }
+                Rectangle {
+                    height: 40px;
+                    border-radius: Theme.radiusSm;
+                    background: Theme.bgElev2;
+                    TouchArea { clicked => { root.refreshDevices(); } }
                     Text {
-                        text: "1. Run synapse-server on your computer\n2. It prints a QR code in the terminal\n3. Scan it with your phone camera\n4. Tap \"Paste link from clipboard\" above\n\nOr type the pairing code directly.";
-                        font-size: 12.5px; color: Theme.textDim; wrap: word-wrap;
+                        text: root.loadingDevices ? "Refreshing…" : "↻ Refresh devices";
+                        color: Theme.text; font-size: 13px; font-weight: 600;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: "Your computers";
+                    font-size: 14px; font-weight: 700; color: Theme.text;
+                }
+                for device[idx] in root.accountDevices : Rectangle {
+                    height: 56px;
+                    border-radius: Theme.radiusSm;
+                    background: Theme.bgElev;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    TouchArea { clicked => { root.selectDevice(device.id); } }
+                    HorizontalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        Text {
+                            text: device.online ? "🟢" : "⚫";
+                            font-size: 14px;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: device.name;
+                                font-size: 15px;
+                                font-weight: 600;
+                                color: Theme.text;
+                            }
+                            Text {
+                                text: device.online ? "Online — tap to connect" : "Offline";
+                                font-size: 12px;
+                                color: Theme.textDim;
+                            }
+                        }
+                    }
+                }
+                if root.accountDevices.length == 0 : Text {
+                    text: "No computers yet.\nRun synapse-server login on your machine.";
+                    font-size: 13px; color: Theme.textDim; wrap: word-wrap;
+                }
+                Text {
+                    text: "Or enter a pairing code from your computer";
+                    font-size: 13px; color: Theme.textDim;
+                }
+                Rectangle {
+                    height: 50px;
+                    background: Theme.bgElev;
+                    border-radius: Theme.radiusSm;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    LineEdit {
+                        placeholder-text: "6-digit pairing code";
+                        text: root.pairingCode;
+                        edited => { root.pairingCode = self.text; }
+                        accepted => { root.claimPairingCode(); }
+                    }
+                }
+                Rectangle {
+                    height: 44px;
+                    border-radius: Theme.radiusSm;
+                    background: Theme.bgElev2;
+                    TouchArea { clicked => { root.claimPairingCode(); } }
+                    Text {
+                        text: "Connect with code";
+                        color: Theme.text; font-size: 14px; font-weight: 600;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 36px;
+                    TouchArea { clicked => { root.signOut(); } }
+                    Text {
+                        text: "Sign out";
+                        color: Theme.danger; font-size: 13px;
+                        horizontal-alignment: center; vertical-alignment: center;
                     }
                 }
             }
+
+            Text { text: root.pairingError; color: Theme.danger; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
 
             // ===== Collapsible manual (advanced) connection =====
             Rectangle {

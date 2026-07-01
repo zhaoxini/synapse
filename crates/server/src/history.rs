@@ -192,3 +192,143 @@ fn clean_title(t: &str) -> String {
 pub fn _shape_session(_obj: &Map<String, Value>) -> Value {
     Value::Null
 }
+
+/// Rough line add/delete counts for Edit-style tools (good enough for list subtitles).
+fn count_line_diff(old: &str, new: &str) -> (u32, u32) {
+    if old == new {
+        return (0, 0);
+    }
+    let a: Vec<&str> = if old.is_empty() {
+        vec![]
+    } else {
+        old.split('\n').collect()
+    };
+    let b: Vec<&str> = if new.is_empty() {
+        vec![]
+    } else {
+        new.split('\n').collect()
+    };
+    if a.is_empty() {
+        return (b.len() as u32, 0);
+    }
+    if b.is_empty() {
+        return (0, a.len() as u32);
+    }
+    let n = a.len();
+    let m = b.len();
+    if n * m > 1_500_000 {
+        return (m as u32, n as u32);
+    }
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut adds = 0u32;
+    let mut dels = 0u32;
+    while i < n && j < m {
+        if a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            dels += 1;
+            i += 1;
+        } else {
+            adds += 1;
+            j += 1;
+        }
+    }
+    dels += (n - i) as u32;
+    adds += (m - j) as u32;
+    (adds, dels)
+}
+
+fn tool_diff(blk: &Value) -> (u32, u32) {
+    let name = blk.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let args = blk.get("input").unwrap_or(blk);
+    match name {
+        "Edit" => {
+            let old = args
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let new = args
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            count_line_diff(old, new)
+        }
+        "MultiEdit" => {
+            let mut adds = 0u32;
+            let mut dels = 0u32;
+            if let Some(edits) = args.get("edits").and_then(|v| v.as_array()) {
+                for e in edits {
+                    let (a, d) = count_line_diff(
+                        e.get("old_string").and_then(|v| v.as_str()).unwrap_or(""),
+                        e.get("new_string").and_then(|v| v.as_str()).unwrap_or(""),
+                    );
+                    adds += a;
+                    dels += d;
+                }
+            }
+            (adds, dels)
+        }
+        "Write" => {
+            let n = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.split('\n').count() as u32)
+                .unwrap_or(0);
+            (n, 0)
+        }
+        _ => (0, 0),
+    }
+}
+
+/// Sum edit-tool line stats from a transcript (for session-list subtitles).
+pub async fn diff_stats(cwd: &str, session_id: &str) -> (u32, u32) {
+    use tokio::io::AsyncBufReadExt;
+    let file = match tokio::fs::File::open(transcript_path(cwd, session_id)).await {
+        Ok(f) => f,
+        Err(_) => return (0, 0),
+    };
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    let mut adds = 0u32;
+    let mut dels = 0u32;
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let evt: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if evt.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = evt
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        else {
+            continue;
+        };
+        for blk in content {
+            if blk.get("type").and_then(|v| v.as_str()) != Some("tool_use") {
+                continue;
+            }
+            let (a, d) = tool_diff(blk);
+            adds += a;
+            dels += d;
+        }
+    }
+    (adds, dels)
+}

@@ -11,26 +11,13 @@
 // On-device pairing is currently env-var auto-connect (see synapse_ios_main in
 // lib.rs); a real pairing screen is a documented later item.
 //
-// The keyboard-frame observer is gone: WKWebView + viewport-fit=cover and the
-// CSS safe-area insets handle the on-screen keyboard natively.
+// Keyboard: CSS safe-area + visualViewport (--kb) in the web bundle.
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-// Starts the embedded web host and returns the URL to load (malloc'd C string,
-// caller frees). Null on failure. Exported from crates/app/src/lib.rs.
 extern char *synapse_web_url(void);
-// Reads SYNAPSE_HOST/PORT/TOKEN before the host starts. Exported from lib.rs;
-// here we just rely on the lib's own defaults set in synapse_ios_main path.
-// (The web URL function reads the environment itself.)
 
-// Remove the keyboard's input-accessory bar (the up/down/Done navigation strip
-// iOS injects above the keyboard for web form fields). There is no public API
-// to disable it on WKWebView, so we dynamically subclass the internal
-// WKContentView and override -inputAccessoryView to return nil. This is the
-// standard, widely-used workaround.
-// ponytail: runtime-subclass hack; the ceiling is a future iOS renaming
-// WKContentView — guarded by the prefix check, which simply no-ops if so.
 static void synapseRemoveInputAccessory(WKWebView *webView) {
     UIView *contentView = nil;
     for (UIView *v in webView.scrollView.subviews) {
@@ -52,17 +39,45 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
     object_setClass(contentView, subclass);
 }
 
+@interface SynapseScriptHandler : NSObject <WKScriptMessageHandler>
+@property (weak, nonatomic) WKWebView *webView;
+@end
+
+@implementation SynapseScriptHandler
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:@"synapse"]) return;
+    NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+    NSString *op = body[@"op"];
+    if ([op isEqualToString:@"haptic"]) {
+        NSString *style = body[@"style"] ?: @"light";
+        UIImpactFeedbackStyle s = UIImpactFeedbackStyleLight;
+        if ([style isEqualToString:@"medium"]) s = UIImpactFeedbackStyleMedium;
+        else if ([style isEqualToString:@"heavy"]) s = UIImpactFeedbackStyleHeavy;
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:s];
+        [gen prepare];
+        [gen impactOccurred];
+    } else if ([op isEqualToString:@"copy"]) {
+        NSString *text = body[@"text"];
+        if ([text isKindOfClass:[NSString class]] && text.length) {
+            [UIPasteboard generalPasteboard].string = text;
+        }
+    } else if ([op isEqualToString:@"inputFocus"]) {
+        if (self.webView) synapseRemoveInputAccessory(self.webView);
+    }
+}
+@end
+
 @interface SynapseWebDelegate : UIResponder <UIApplicationDelegate, WKNavigationDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @property (strong, nonatomic) WKWebView *web;
+@property (strong, nonatomic) SynapseScriptHandler *scriptHandler;
 @end
 
 @implementation SynapseWebDelegate
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Default connection env for simulator/dev. A pairing flow would set these
-    // before the web URL is built.
     setenv("SYNAPSE_HOST", "127.0.0.1", 0);
     setenv("SYNAPSE_PORT", "4173", 0);
     setenv("SYNAPSE_TOKEN", "CODE", 0);
@@ -71,10 +86,23 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
 
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
     cfg.allowsInlineMediaPlayback = YES;
+    self.scriptHandler = [[SynapseScriptHandler alloc] init];
+    WKUserContentController *uc = [[WKUserContentController alloc] init];
+    [uc addScriptMessageHandler:self.scriptHandler name:@"synapse"];
+    NSString *bridgeJs =
+        @"window.__synapseHaptic__=function(s){try{webkit.messageHandlers.synapse.postMessage({op:'haptic',style:s||'light'});}catch(e){}};"
+         "window.__synapseCopy__=function(t){try{webkit.messageHandlers.synapse.postMessage({op:'copy',text:String(t||'')});}catch(e){}};"
+         "document.addEventListener('focusin',function(e){if(e.target&&e.target.id==='input'){try{webkit.messageHandlers.synapse.postMessage({op:'inputFocus'});}catch(x){}}},true);";
+    WKUserScript *script = [[WKUserScript alloc] initWithSource:bridgeJs
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                               forMainFrameOnly:YES];
+    [uc addUserScript:script];
+    cfg.userContentController = uc;
+
     self.web = [[WKWebView alloc] initWithFrame:self.window.bounds configuration:cfg];
+    self.scriptHandler.webView = self.web;
     self.web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.web.navigationDelegate = self;
-    // Let CSS env(safe-area-inset-*) drive insets; webview fills the window.
     self.web.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
 
     UIViewController *vc = [[UIViewController alloc] init];
@@ -92,14 +120,12 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
             [self.web loadRequest:[NSURLRequest requestWithURL:url]];
         }
     } else {
-        // Host failed to start — show a minimal message.
         [self.web loadHTMLString:@"<h2 style='font-family:sans-serif;padding:40px'>Could not start chat host.</h2>"
                          baseURL:nil];
     }
     return YES;
 }
 
-// Strip the keyboard accessory bar once the content view exists (post-load).
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     synapseRemoveInputAccessory(webView);
 }
