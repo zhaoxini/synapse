@@ -51,8 +51,11 @@ const state = {
   // into a single "Worked for Xs ›" disclosure above the final reply text.
   //   { el, workWrap, workBody, replyWrap, items:[], tools:Map, text, startMs }
   turn: null,
+  stream: null,       // live stream_event parser (reset each turn)
   msNow: 0,           // monotonic-ish clock fed from frames (no Date in workflow ctx, fine here)
 };
+
+state.stream = createStreamState();
 
 // ---- credential injection: native / URL / localStorage ----
 const CREDS_KEY = "synapse_creds";
@@ -299,7 +302,7 @@ function handleEvent(evt) {
     setSessionState(evt.sessionId, sub === "turn_started" ? "busy" : (sub === "bridge_error" ? "error" : "idle"));
     if (evt.sessionId === state.activeId) {
       if (sub === "turn_started") { startTurn(); setBusy(true); }
-      else if (sub === "turn_stopped") { setBusy(false); finalizeStream(); }
+      else if (sub === "turn_stopped") { setBusy(false); state.stream.reset(); finalizeStream(); }
       else { pushError(str(evt.error) || "Turn failed"); setBusy(false); finalizeStream(); }
     }
     return;
@@ -307,6 +310,7 @@ function handleEvent(evt) {
   if (evt.sessionId && evt.sessionId !== state.activeId) return;
   if (typeof evt.ttft_ms === "number") state.msNow += 0; // (kept simple; elapsed uses counters below)
   if (t === "system") { /* api_retry / fallback_to_json: no-op for the open view */ return; }
+  if (t === "stream_event") { ingestStreamEvent(evt); return; }
   if (t === "assistant") { ingestAssistant(evt); return; }
   if (t === "permission_request") { showPermission(evt); return; }
   if (t === "user") {
@@ -324,11 +328,171 @@ function handleEvent(evt) {
     }
     return;
   }
-  if (t === "result") { ingestResult(evt); return; }
+  if (t === "result") { state.stream.reset(); ingestResult(evt); return; }
   if (t === "stderr") {
     const txt = str(evt.text);
     if (txt) pushStderr(txt);
     return;
+  }
+}
+
+// =================== stream_event parser (mirrors crates/app StreamState) ===================
+function createStreamState() {
+  return {
+    messageId: "",
+    blocks: new Map(),
+    blockOrder: [],
+    toolInputBuf: new Map(),
+    reset() {
+      this.messageId = "";
+      this.blocks.clear();
+      this.blockOrder = [];
+      this.toolInputBuf.clear();
+    },
+    apply(evt) {
+      if (evt.type !== "stream_event") return;
+      this.applyAnthropic(evt.event || {});
+    },
+    applyAnthropic(ev) {
+      const et = ev.type || "";
+      if (et === "message_start") {
+        const id = ev.message && ev.message.id;
+        if (id) this.messageId = id;
+        this.blocks.clear();
+        this.blockOrder = [];
+        this.toolInputBuf.clear();
+        return;
+      }
+      if (et === "content_block_start") {
+        const idx = ev.index ?? 0;
+        if (this.blocks.has(idx)) return;
+        const cb = ev.content_block || {};
+        const bt = cb.type || "text";
+        const block = { kind: bt === "tool_use" ? "tool" : bt, text: "" };
+        if (bt === "tool_use") {
+          block.toolId = cb.id || "";
+          block.toolName = cb.name || "tool";
+          block.toolInput = (cb.input && typeof cb.input === "object") ? cb.input : {};
+          block.toolStatus = "running";
+        } else if (bt === "thinking") {
+          block.text = cb.thinking || "";
+        } else {
+          block.text = cb.text || "";
+        }
+        this.blocks.set(idx, block);
+        this.blockOrder.push(idx);
+        return;
+      }
+      if (et === "content_block_delta") {
+        const idx = ev.index ?? 0;
+        let block = this.blocks.get(idx);
+        if (!block) {
+          block = { kind: "text", text: "" };
+          this.blocks.set(idx, block);
+          this.blockOrder.push(idx);
+        }
+        const delta = ev.delta || {};
+        const dt = delta.type || "";
+        if (dt === "text_delta") {
+          block.kind = "text";
+          block.text = (block.text || "") + (delta.text || "");
+        } else if (dt === "thinking_delta") {
+          block.kind = "thinking";
+          block.text = (block.text || "") + (delta.thinking || "");
+        } else if (dt === "input_json_delta") {
+          block.kind = "tool";
+          const buf = (this.toolInputBuf.get(idx) || "") + (delta.partial_json || "");
+          this.toolInputBuf.set(idx, buf);
+          try {
+            const parsed = JSON.parse(buf);
+            block.toolInput = parsed;
+            block.toolName = block.toolName || "tool";
+          } catch { /* partial json */ }
+        }
+      }
+    },
+  };
+}
+
+function thinkingText(blk) {
+  if (!blk || typeof blk !== "object") return "";
+  if (typeof blk.thinking === "string") return blk.thinking;
+  if (typeof blk.text === "string" && blk.type === "thinking") return blk.text;
+  if (blk.type === "redacted_thinking") {
+    return typeof blk.data === "string" && blk.data
+      ? "[Encrypted thinking]"
+      : "[Encrypted thinking — content not available]";
+  }
+  return "";
+}
+
+const THINKING_EMPTY_HINT = "思考内容未返回。若模型启用了加密思考，终端可能不会下发明文。";
+
+function ingestStreamEvent(evt) {
+  if (!state.turn) startTurn();
+  state.stream.apply(evt);
+  flushStreamToTurn();
+}
+
+function flushStreamToTurn() {
+  const tn = state.turn;
+  const st = state.stream;
+  if (!tn || !st.blockOrder.length) return;
+  const prevTools = new Map(tn.tools);
+  const order = [];
+  const tools = new Map();
+  for (const idx of st.blockOrder) {
+    const b = st.blocks.get(idx);
+    if (!b) continue;
+    if (b.kind === "thinking") {
+      order.push({ kind: "thinking", text: b.text || "" });
+    } else if (b.kind === "tool") {
+      const id = b.toolId || `stream-${idx}`;
+      const prev = prevTools.get(id);
+      tools.set(id, {
+        id,
+        name: b.toolName || "tool",
+        args: b.toolInput || {},
+        input: JSON.stringify(b.toolInput ?? {}, null, 2),
+        status: prev ? prev.status : (b.toolStatus || "running"),
+        output: prev ? prev.output : "",
+      });
+      order.push({ kind: "tool", id });
+    } else if (b.kind === "text") {
+      order.push({ kind: "text", text: b.text || "" });
+    }
+  }
+  tn.order = order;
+  tn.tools = tools;
+  ensureTurnInDom();
+  renderTurn(false);
+  updatePulse();
+  ensurePinned();
+}
+
+function rebuildTurnFromMessage(tn, content) {
+  const prevTools = new Map(tn.tools);
+  tn.order = [];
+  tn.tools = new Map();
+  for (const blk of content) {
+    if (!blk || !blk.type) continue;
+    if (blk.type === "text" && typeof blk.text === "string") {
+      appendSeg(tn, "text", blk.text);
+    } else if (blk.type === "thinking" || blk.type === "redacted_thinking") {
+      appendSeg(tn, "thinking", thinkingText(blk));
+    } else if (blk.type === "tool_use") {
+      const id = blk.id;
+      const prev = prevTools.get(id);
+      const tool = {
+        id, name: blk.name,
+        args: (blk.input && typeof blk.input === "object") ? blk.input : {},
+        input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
+        status: prev ? prev.status : "running",
+        output: prev ? prev.output : "",
+      };
+      tn.tools.set(id, tool);
+      tn.order.push({ kind: "tool", id });
+    }
   }
 }
 
@@ -339,6 +503,7 @@ function handleEvent(evt) {
 function startTurn() {
   // close any previous turn first (defensive; turn_stopped normally does this)
   if (state.turn) finalizeStream();
+  state.stream.reset();
   const el = mkMsg("assistant");
   const body = el.querySelector(".body");
   const workWrap = document.createElement("div"); workWrap.className = "work";
@@ -386,22 +551,31 @@ function ingestAssistant(evt) {
   const ts = evt.timestamp ? Date.parse(evt.timestamp) : 0;
   if (ts) { if (!tn.firstTs) tn.firstTs = ts; tn.lastTs = ts; }
 
-  for (const blk of content) {
-    if (blk.type === "text" && typeof blk.text === "string") {
-      appendSeg(tn, "text", blk.text);
-    } else if (blk.type === "thinking" && typeof blk.thinking === "string" && blk.thinking) {
-      appendSeg(tn, "thinking", blk.thinking);
-    } else if (blk.type === "tool_use") {
-      const tool = {
-        id: blk.id, name: blk.name,
-        args: (blk.input && typeof blk.input === "object") ? blk.input : {},
-        input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
-        status: "running", output: "",
-      };
-      tn.tools.set(blk.id, tool);
-      tn.order.push({ kind: "tool", id: blk.id });
+  const mid = msg.id || "";
+  const streaming = state.busy && mid && state.stream.messageId === mid;
+  if (streaming || (state.busy && state.stream.blockOrder.length > 0)) {
+    rebuildTurnFromMessage(tn, content);
+  } else {
+    for (const blk of content) {
+      if (blk.type === "text" && typeof blk.text === "string") {
+        appendSeg(tn, "text", blk.text);
+      } else if (blk.type === "thinking" || blk.type === "redacted_thinking") {
+        appendSeg(tn, "thinking", thinkingText(blk));
+      } else if (blk.type === "tool_use") {
+        const tool = {
+          id: blk.id, name: blk.name,
+          args: (blk.input && typeof blk.input === "object") ? blk.input : {},
+          input: typeof blk.input === "string" ? blk.input : JSON.stringify(blk.input ?? {}, null, 2),
+          status: "running", output: "",
+        };
+        const prev = tn.tools.get(blk.id);
+        if (prev) { tool.status = prev.status; tool.output = prev.output; }
+        tn.tools.set(blk.id, tool);
+        tn.order.push({ kind: "tool", id: blk.id });
+      }
     }
   }
+  if (streaming) state.stream.reset();
 
   const hasContent = tn.order.length > 0;
   if (hasContent) { ensureTurnInDom(); renderTurn(false); }
@@ -681,7 +855,8 @@ function closeSheet() {
   $("bottomSheet").style.transform = "";
 }
 function openThinkingSheet(text, secs) {
-  openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", text || "No details.");
+  const body = (text || "").trim() || THINKING_EMPTY_HINT;
+  openSheet(secs > 0 ? `Thought ${fmtElapsed(secs)}` : "Thought", body);
 }
 function openToolSheet(t) {
   const meta = toolMeta(t);
@@ -693,16 +868,18 @@ function openToolSheet(t) {
 }
 function openWorkSheet(items, tn, secs) {
   const wrap = document.createElement("div");
-  for (const it of items) {
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
     const block = document.createElement("div");
     block.className = "sheet-item";
     const lbl = document.createElement("div");
     lbl.className = "sheet-item-label";
     if (it.kind === "thinking") {
-      lbl.textContent = thinkingLabel(secs, false);
+      const itemSecs = thinkingSecsForItem(tn, it, i, items);
+      lbl.textContent = thinkingLabel(itemSecs, false);
       const pre = document.createElement("div");
       pre.className = "sheet-thinking";
-      pre.textContent = it.text;
+      pre.textContent = (it.text || "").trim() || THINKING_EMPTY_HINT;
       block.appendChild(lbl); block.appendChild(pre);
     } else if (it.kind === "tool") {
       const t = tn.tools.get(it.id);

@@ -777,7 +777,8 @@ body:not(.mode-chat) #input {
 }
 #sheetBody .md { color: var(--ink); }
 #sheetBody .sheet-thinking {
-  white-space: pre-wrap; word-break: break-word; color: var(--ink-2); font-size: 14px;
+  white-space: pre-wrap; word-break: break-word; color: var(--ink); font-size: 15px;
+  line-height: 1.5; min-height: 1.5em;
 }
 #sheetBody .sheet-item { margin-bottom: 16px; }
 #sheetBody .sheet-item:last-child { margin-bottom: 0; }

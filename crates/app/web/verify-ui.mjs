@@ -143,6 +143,33 @@ async function main() {
     const sendDisabled = await page.locator("#sendBtn").isDisabled();
     sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
 
+    // thinking stream → sheet content
+    await page.evaluate(() => {
+      const { handleEvent } = window.__synapse;
+      handleEvent({ type: "system", subtype: "turn_started", sessionId: "s2" });
+      handleEvent({
+        type: "stream_event", sessionId: "s2",
+        event: { type: "message_start", message: { id: "msg_think", role: "assistant", content: [] } },
+      });
+      handleEvent({
+        type: "stream_event", sessionId: "s2",
+        event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+      });
+      handleEvent({
+        type: "stream_event", sessionId: "s2",
+        event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Analyzing the UI layout." } },
+      });
+    });
+    await page.waitForTimeout(150);
+    await page.locator(".status-line", { hasText: "Thought" }).first().click();
+    const thoughtBody = await page.locator("#sheetBody .sheet-thinking").textContent();
+    thoughtBody && thoughtBody.includes("Analyzing")
+      ? ok("Thinking sheet shows streamed content") : fail(`Thinking content missing (${thoughtBody})`);
+    await page.locator("#sheetClose").click();
+    await page.evaluate(() => {
+      window.__synapse.handleEvent({ type: "system", subtype: "turn_stopped", sessionId: "s2" });
+    });
+
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
