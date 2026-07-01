@@ -7,34 +7,20 @@ set -euo pipefail
 
 RELAY_SSH="${RELAY_SSH:-root@192.3.179.202}"
 RELAY_HOST="${RELAY_HOST:-zx0623.duckdns.org}"
-VERSION="${SYNAPSE_VERSION:-v0.2.0}"
+VERSION="${SYNAPSE_VERSION:-v0.2.1}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 info() { printf '==> %s\n' "$*"; }
 
-info "Upload install scripts to ${RELAY_SSH}..."
-ssh "${RELAY_SSH}" 'mkdir -p /var/www/synapse/install /var/www/synapse/releases'
-scp "${ROOT}/scripts/install.sh" "${ROOT}/scripts/install-relay.sh" "${RELAY_SSH}:/var/www/synapse/install/"
-ssh "${RELAY_SSH}" 'cp /var/www/synapse/install/install.sh /var/www/synapse/install.sh
-cp /var/www/synapse/install/install-relay.sh /var/www/synapse/install-relay.sh
-chmod 755 /var/www/synapse/install.sh /var/www/synapse/install-relay.sh /var/www/synapse/install/*.sh'
-
-info "Ensure release tarballs cached (${VERSION})..."
-ssh "${RELAY_SSH}" "bash -s" <<REMOTE
-set -euo pipefail
-cd /var/www/synapse/releases
-ver="${VERSION#v}"
-for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
-  f="synapse-\${ver}-\${target}.tar.gz"
-  if [ ! -f "\$f" ]; then
-    curl -fsSL -L "https://github.com/zhaoxini/synapse/releases/download/${VERSION}/\$f" -o "\$f"
-  fi
-done
-ls -lh
-REMOTE
+info "Upload mirror scripts to ${RELAY_SSH}..."
+ssh "${RELAY_SSH}" "mkdir -p /opt/synapse/scripts /opt/synapse/mirror"
+scp "${ROOT}/scripts/install.sh" "${ROOT}/scripts/install-relay.sh" \
+  "${ROOT}/scripts/sync-mirror-vps.sh" "${ROOT}/scripts/vps-sync-web.sh" \
+  "${RELAY_SSH}:/opt/synapse/scripts/"
+ssh "${RELAY_SSH}" 'chmod +x /opt/synapse/scripts/sync-mirror-vps.sh /opt/synapse/scripts/vps-sync-web.sh && SYNAPSE_ROOT=/opt/synapse bash /opt/synapse/scripts/sync-mirror-vps.sh'
 
 info "Verify mirror..."
 curl -fsS "https://${RELAY_HOST}/install.sh" | head -3
 curl -fsS -o /dev/null -w "releases: HTTP %{http_code}\n" \
   "https://${RELAY_HOST}/releases/synapse-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
-info "Done. Users can run: curl -fsSL https://${RELAY_HOST}/install.sh | bash"
+info "Done. Users: curl -fsSL https://${RELAY_HOST}/install.sh | bash"
