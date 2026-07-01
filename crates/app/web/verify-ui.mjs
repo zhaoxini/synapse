@@ -94,26 +94,26 @@ async function main() {
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
 
     await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
-    ok("Repos view is default");
+    ok("Workspaces view is default");
 
-    (await page.locator("#pageTitle").textContent()) === "Repos"
-      ? ok("Repos page title") : fail("Repos title missing");
+    (await page.locator("#pageTitle").textContent()) === "Workspaces"
+      ? ok("Workspaces page title") : fail("Workspaces title missing");
 
     !(await page.locator(".ws-row", { hasText: "All Repos" }).count())
       ? ok("No duplicate All Repos node") : fail("All Repos aggregate should be removed");
 
-    (await page.locator(".repo-row").count()) >= 1
-      ? ok("Repo rows rendered") : fail("Repo rows missing");
+    (await page.locator(".ws-row").count()) >= 1
+      ? ok("Workspace rows rendered") : fail("Workspace rows missing");
 
     !(await page.locator("#workspaceList .sess-row").count())
       ? ok("Sessions not inline on main list") : fail("Sessions should only appear in drawer");
 
-    await page.locator(".repo-row").first().click();
+    await page.locator(".ws-row").first().click();
     await page.waitForTimeout(200);
     (await page.locator("#sessionDrawer.show").count()) > 0
-      ? ok("Session drawer opens on repo tap") : fail("Session drawer missing");
+      ? ok("Session drawer opens on workspace tap") : fail("Session drawer missing");
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Repo tap stays on list view") : fail("Repo tap should not leave list view");
+      ? ok("Workspace tap stays on list view") : fail("Workspace tap should not leave list view");
 
     (await page.locator("#drawerBody .sess-row").count()) > 0
       ? ok("Sessions shown in drawer") : fail("Drawer sessions missing");
@@ -122,7 +122,7 @@ async function main() {
       ? ok("No new session row in drawer") : fail("Drawer should not show new session row");
 
     !(await page.locator("#composer").isVisible())
-      ? ok("Composer hidden on repos list") : fail("Composer should be hidden on repos list");
+      ? ok("Composer hidden on workspaces list") : fail("Composer should be hidden on workspaces list");
 
     await page.locator("#drawerClose").click();
     await page.waitForTimeout(150);
@@ -131,10 +131,10 @@ async function main() {
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("+ stays on repos list") : fail("+ should not leave repos list");
+      ? ok("+ stays on workspaces list") : fail("+ should not leave workspaces list");
     (await page.locator("#bottomSheet.show").count()) > 0
-      && (await page.locator("#sheetTitle").textContent()) === "Add repo"
-      ? ok("+ opens add repo sheet") : fail("+ should open add repo sheet");
+      && (await page.locator("#sheetTitle").textContent()) === "Add workspace"
+      ? ok("+ opens add workspace sheet") : fail("+ should open add workspace sheet");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
     await page.locator("#sheetClose").click();
@@ -153,7 +153,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
 
-    await page.locator(".repo-row").first().click();
+    await page.locator(".ws-row").first().click();
     await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.spark").count()) > 0
@@ -228,7 +228,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Back returns to repos list") : fail("Back did not return to repos list");
+      ? ok("Back returns to workspaces list") : fail("Back did not return to workspaces list");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");

@@ -22,12 +22,12 @@
     </div>
 
     <div id="pageHead">
-      <h1 id="pageTitle">Repos</h1>
+      <h1 id="pageTitle">Workspaces</h1>
       <div class="page-actions">
         <button id="searchBtn" class="iconbtn iconbtn-glass" aria-label="Search">
           <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.7"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
-        <button id="newBtn" class="iconbtn iconbtn-glass" aria-label="Add repo">
+        <button id="newBtn" class="iconbtn iconbtn-glass" aria-label="Add workspace">
           <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
       </div>
@@ -44,7 +44,7 @@
   <div id="reconnect">Reconnecting…</div>
   <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
 
-  <!-- Repo list (tap a repo to open its session drawer) -->
+  <!-- Workspace list (tap to open session drawer) -->
   <section id="workspaceView">
     <div id="pullRefresh" class="hidden" aria-hidden="true"><span class="pull-spin"></span><span class="pull-label">Release to refresh</span></div>
     <div id="workspaceList"></div>
@@ -66,7 +66,7 @@
         <p id="emptySub"></p>
         <div class="suggestions">
           <button type="button" data-prompt="Summarize the recent changes in this repo.">Summarize recent changes</button>
-          <button type="button" data-prompt="Explain what this project does.">Explain this project</button>
+          <button type="button" data-prompt="Explain what this workspace does.">Explain this workspace</button>
           <button type="button" data-prompt="Find and fix any failing tests.">Find and fix failing tests</button>
         </div>
       </div>

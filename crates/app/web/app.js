@@ -29,8 +29,8 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
-  view: "workspaces", // "workspaces" | "chat" — home = repo list
-  sessionDrawerRepo: null,
+  view: "workspaces", // "workspaces" | "chat" — home = workspace list
+  sessionDrawerWorkspace: null,
   searchOpen: false,
   searchQuery: "",
   creating: false,
@@ -41,8 +41,8 @@ const state = {
   models: [],          // model catalog from hello: [{id,label}]
   defaultModel: "",    // pre-selected model id for new sessions
   pendingModel: null,  // model chosen before a session exists; used on create
-  cwds: [],            // project working dirs from hello (git repos)
-  pendingCwd: null,    // project chosen for the next create
+  cwds: [],            // workspace paths from hello (git repos)
+  pendingCwd: null,    // workspace chosen for the next create
   pendingMode: null,   // permission mode chosen before a session exists
   pendingSend: null,   // message queued while a new session is being created
   blocks: [],         // rendered message elements (for empty/clear bookkeeping)
@@ -270,7 +270,7 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
-      if (state.view === "workspaces") renderRepoList();
+      if (state.view === "workspaces") renderWorkspaceList();
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -281,7 +281,7 @@ function handle(v) {
     case "event": handleEvent(v.event); break;
     case "error":
       state.creating = false;
-      if (state.view === "workspaces") renderRepoList();
+      if (state.view === "workspaces") renderWorkspaceList();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -308,7 +308,7 @@ function handleEvent(evt) {
       showWorkspaces();
       updateChrome();
     }
-    renderRepoList();
+    renderWorkspaceList();
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
@@ -1326,7 +1326,7 @@ function openAttachMenu() {
     row.addEventListener("click", (e) => { e.stopPropagation(); closeMenus(); onClick(); });
     menu.appendChild(row);
   };
-  addRow(`Project · ${basename(currentCwd()) || "Local"}`, () => openLocalMenu());
+  addRow(`Workspace · ${basename(currentCwd()) || "Local"}`, () => openLocalMenu());
   addRow(`Permissions · ${permLabelFor(currentMode())}`, () => {
     openMenu("permMenu", PERM_MODES.map(m => ({ id: m.id, label: m.label })), currentMode(), chooseMode, "");
   });
@@ -1679,7 +1679,7 @@ function updatePulse() {
 // =================== sessions ===================
 function setSessions(list) {
   state.sessions = list || [];
-  if (state.view === "workspaces") renderRepoList();
+  if (state.view === "workspaces") renderWorkspaceList();
   // After a server restart, auto-created sessions come back with new ids, so a
   // still-selected old id is now dead — requesting its history returns found:false
   // and the view stays stuck on the welcome page. Drop the dead id and fall through
@@ -1693,7 +1693,7 @@ function setSessions(list) {
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
-  if (state.view === "workspaces") renderRepoList();
+  if (state.view === "workspaces") renderWorkspaceList();
 }
 // Track a session's running state from live turn_started/turn_stopped (broadcast
 // for every session) so the drawer dot and busy-on-open stay correct even for
@@ -1702,7 +1702,7 @@ function setSessionState(id, st) {
   const ses = state.sessions.find(x => x.id === id);
   if (!ses || ses.state === st) return;
   ses.state = st;
-  if (state.view === "workspaces") renderRepoList();
+  if (state.view === "workspaces") renderWorkspaceList();
   if (id === state.activeId && state.view === "chat") updateChrome();
 }
 // Session titles come from the transcript's first user line, which is often
@@ -1796,14 +1796,14 @@ function normalizePath(p) {
   return s;
 }
 
-function repoPaths() {
+function workspacePaths() {
   const paths = new Set();
-  // Every session belongs to a repo — repos are derived from session cwd first.
+  // Every session belongs to a workspace — derived from session cwd first.
   for (const s of state.sessions) {
     const n = normalizePath(s.cwd);
     if (n) paths.add(n);
   }
-  // Also show registered repos that have no sessions yet.
+  // Also show registered workspaces that have no sessions yet.
   for (const p of state.cwds || []) {
     const n = normalizePath(p);
     if (n) paths.add(n);
@@ -1825,7 +1825,7 @@ function repoPaths() {
 
 function renderSessionDrawerBody(path) {
   const body = $("drawerBody");
-  if (!body || normalizePath(state.sessionDrawerRepo) !== normalizePath(path)) return;
+  if (!body || normalizePath(state.sessionDrawerWorkspace) !== normalizePath(path)) return;
   body.innerHTML = "";
 
   const pending = normalizePath(state.pendingCwd);
@@ -1853,7 +1853,7 @@ function renderSessionDrawerBody(path) {
 function openSessionDrawer(path) {
   const norm = normalizePath(path);
   if (!norm) return;
-  state.sessionDrawerRepo = norm;
+  state.sessionDrawerWorkspace = norm;
   $("drawerTitle").textContent = basename(norm);
   renderSessionDrawerBody(norm);
   $("drawerMask").classList.add("show");
@@ -1863,22 +1863,22 @@ function openSessionDrawer(path) {
 }
 
 function closeSessionDrawer() {
-  state.sessionDrawerRepo = null;
+  state.sessionDrawerWorkspace = null;
   $("drawerMask").classList.remove("show");
   $("sessionDrawer").classList.remove("show");
   $("sessionDrawer").setAttribute("aria-hidden", "true");
 }
 
-function filteredSessions(repoPath) {
+function filteredSessions(workspacePath) {
   const q = (state.searchQuery || "").toLowerCase();
   return state.sessions
     .filter(s => state.showArchived ? s.archived : !s.archived)
-    .filter(s => !repoPath || normalizePath(s.cwd) === repoPath)
+    .filter(s => !workspacePath || normalizePath(s.cwd) === workspacePath)
     .filter(s => {
       if (!q) return true;
       const title = cleanTitle(s.name).toLowerCase();
-      const repo = basename(s.cwd || "").toLowerCase();
-      return title.includes(q) || repo.includes(q);
+      const ws = basename(s.cwd || "").toLowerCase();
+      return title.includes(q) || ws.includes(q);
     })
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
@@ -1925,7 +1925,7 @@ function appendSessionRow(parent, s) {
   bindLongPress(row, s);
 }
 
-function renderRepoList() {
+function renderWorkspaceList() {
   const list = $("workspaceList");
   if (!list) return;
   list.innerHTML = "";
@@ -1937,11 +1937,11 @@ function renderRepoList() {
     archivedToggle.textContent = state.showArchived ? "Hide archived" : "Show archived";
   }
 
-  const paths = repoPaths();
+  const paths = workspacePaths();
   if (!paths.length && !q) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    hint.innerHTML = `No repos yet<br><span class="empty-hint-sub">Tap + to add a repo</span>`;
+    hint.innerHTML = `No workspaces yet<br><span class="empty-hint-sub">Tap + to add a workspace</span>`;
     list.appendChild(hint);
     return;
   }
@@ -1958,19 +1958,19 @@ function renderRepoList() {
 
     any = true;
     const count = sessions.length;
-    const countHtml = count ? `<span class="repo-count">${count}</span>` : "";
+    const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
     const row = document.createElement("div");
-    row.className = "repo-row";
+    row.className = "ws-row";
     row.innerHTML =
-      `<span class="repo-name">${escapeHtml(label)}</span>` +
+      `<span class="ws-name">${escapeHtml(label)}</span>` +
       countHtml +
-      `<span class="repo-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+      `<span class="ws-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
     row.title = path;
     row.addEventListener("click", () => openSessionDrawer(path));
     list.appendChild(row);
   }
 
-  if (state.sessionDrawerRepo) renderSessionDrawerBody(state.sessionDrawerRepo);
+  if (state.sessionDrawerWorkspace) renderSessionDrawerBody(state.sessionDrawerWorkspace);
 
   if (!any && q) {
     const hint = document.createElement("div");
@@ -1980,7 +1980,7 @@ function renderRepoList() {
   }
 }
 
-function openProjectPickerSheet(onPick) {
+function openWorkspacePickerSheet(onPick) {
   closeMenus();
   const pick = onPick || ((path) => chooseCwd(path));
   const wrap = document.createElement("div");
@@ -1991,7 +1991,7 @@ function openProjectPickerSheet(onPick) {
   const inp = document.createElement("input");
   inp.type = "text";
   inp.className = "model-search";
-  inp.placeholder = "Repo path, e.g. ~/code/foo";
+  inp.placeholder = "Workspace path, e.g. ~/code/foo";
   inp.style.paddingLeft = "12px";
   inp.autocomplete = "off";
   pathWrap.appendChild(inp);
@@ -2010,13 +2010,13 @@ function openProjectPickerSheet(onPick) {
   const render = (query) => {
     list.innerHTML = "";
     const q = (query || "").trim().toLowerCase();
-    const repos = (state.cwds || []).filter((p) => {
+    const items = (state.cwds || []).filter((p) => {
       const b = basename(p).toLowerCase();
       return !q || b.includes(q) || String(p).toLowerCase().includes(q);
     });
-    if (repos.length) {
-      addSection("Repositories");
-      for (const p of repos) {
+    if (items.length) {
+      addSection("Workspaces");
+      for (const p of items) {
         const row = document.createElement("button");
         row.type = "button";
         row.className = "model-row";
@@ -2026,10 +2026,10 @@ function openProjectPickerSheet(onPick) {
         list.appendChild(row);
       }
     } else if (q) {
-      addSection("Repositories");
+      addSection("Workspaces");
       const empty = document.createElement("div");
       empty.className = "model-empty";
-      empty.textContent = "No repositories match your search";
+      empty.textContent = "No workspaces match your search";
       list.appendChild(empty);
     }
   };
@@ -2045,16 +2045,16 @@ function openProjectPickerSheet(onPick) {
   wrap.appendChild(list);
 
   $("bottomSheet").classList.add("sheet-picker");
-  openSheet("Add repo", wrap);
+  openSheet("Add workspace", wrap);
   requestAnimationFrame(() => inp.focus());
 }
 
-function openAddRepo() {
-  openProjectPickerSheet((path) => {
+function openAddWorkspace() {
+  openWorkspacePickerSheet((path) => {
     const norm = normalizePath(path);
     state.pendingCwd = norm;
     send({ op: "register_project", path: norm });
-    renderRepoList();
+    renderWorkspaceList();
   });
 }
 
@@ -2093,7 +2093,7 @@ function showWorkspaces() {
   document.body.classList.add("mode-workspaces");
   closeSessionDrawer();
   updateChrome();
-  renderRepoList();
+  renderWorkspaceList();
 }
 
 function showChat(pushHistory) {
@@ -2114,7 +2114,7 @@ function updateChrome() {
   const searchBtn = $("searchBtn");
   if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
   if (state.view === "workspaces") {
-    pageTitle.textContent = "Repos";
+    pageTitle.textContent = "Workspaces";
     chatTitle.hidden = true;
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
@@ -2231,7 +2231,7 @@ window.addEventListener("popstate", () => {
     navFromPop = false;
   }
 });
-$("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddRepo(); });
+$("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddWorkspace(); });
 $("drawerClose").addEventListener("click", () => { haptic("light"); closeSessionDrawer(); });
 $("drawerMask").addEventListener("click", closeSessionDrawer);
 $("searchBtn").addEventListener("click", () => {
@@ -2242,11 +2242,11 @@ $("searchBtn").addEventListener("click", () => {
 });
 searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
-  if (state.view === "workspaces") renderRepoList();
+  if (state.view === "workspaces") renderWorkspaceList();
 });
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
-  renderRepoList();
+  renderWorkspaceList();
 });
 
 function startNewDraft(cwd) {
@@ -2261,7 +2261,7 @@ function startNewDraft(cwd) {
   syncLocalLabel();
   const es = $("emptySub");
   if (es) {
-    const c = state.pendingCwd || repoPaths()[0];
+    const c = state.pendingCwd || workspacePaths()[0];
     es.textContent = c ? basename(c) : "";
   }
   showChat();
@@ -2272,11 +2272,11 @@ function newSession() {
   if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
-  const cwd = state.pendingCwd || repoPaths()[0];
+  const cwd = state.pendingCwd || workspacePaths()[0];
   if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   state.creating = true;
-  if (state.view === "workspaces") renderRepoList();
+  if (state.view === "workspaces") renderWorkspaceList();
   send({ op: "create", opts });
 }
 

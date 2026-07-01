@@ -6,30 +6,32 @@ This document is the source of truth for tokens, component structure, and layout
 
 ---
 
-## Domain model (projects & sessions)
+## Domain model (workspaces & sessions)
 
 ```
 Server                              Client (projection)
 ──────                              ─────────────────
 ~/.claude.json git projects  ──┐
-~/.synapse/projects.json     ──┼──► hello.cwds[]  ──► projectPaths()
+~/.synapse/projects.json     ──┼──► hello.cwds[]  ──► workspacePaths()
                                │
-SessionSummary.cwd (immutable) ─┼──► state.sessions[] ──► filteredSessions(project)
+SessionSummary.cwd (immutable) ─┼──► state.sessions[] ──► filteredSessions(workspace)
                                │
 create { opts.cwd }  ◄─────────┘    pendingCwd / draft (pre-create only)
 register_project { path } ──► persists path, returns updated cwds
 ```
 
-**Mental model:** A **Project** is an absolute path to a folder (usually a git repo). A **Session** belongs to exactly one project (`session.cwd`, set at create). The home screen is a **project tree**: each project expands to show its sessions. There is no aggregate “All Repos” duplicate list.
+**Terminology:** **Workspace** is the canonical name in UI and docs. *Repo* and *Project* mean the same thing (a git working directory path). Use **Workspace** in user-facing copy.
+
+**Mental model:** A **Workspace** is an absolute path to a folder (usually a git repo). A **Session** belongs to exactly one workspace (`session.cwd`, set at create). The home screen lists workspaces; tapping one opens a session drawer overlay.
 
 | Term (UI) | Protocol / code | Meaning |
 |-----------|-----------------|---------|
-| Project | `cwds[]`, `opts.cwd`, `session.cwd` | Absolute path to working directory |
-| Projects (screen) | `state.view === "workspaces"` | List + tree mode (CSS class unchanged) |
-| Add project (`+`) | `op: register_project` | Register folder on server + pick for next session |
-| New session | `op: create` | New Claude session in `pendingCwd` project |
+| Workspace | `cwds[]`, `opts.cwd`, `session.cwd` | Absolute path to working directory |
+| Workspaces (screen) | `state.view === "workspaces"` | List mode (CSS class unchanged) |
+| Add workspace (`+`) | `op: register_project` | Register folder on server |
+| New session | `op: create` | New Claude session in `pendingCwd` workspace |
 
-**Server persistence:** manually added projects are stored in `~/.synapse/projects.json` and merged with Claude-discovered git repos on every `hello` / `refresh_cwds`.
+**Server persistence:** manually added workspaces are stored in `~/.synapse/projects.json` and merged with Claude-discovered git repos on every `hello` / `refresh_cwds`. Wire op name `register_project` is historical.
 
 ---
 
