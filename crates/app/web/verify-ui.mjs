@@ -151,6 +151,12 @@ async function main() {
     (await page.locator("#composerControls").isVisible())
       ? ok("Expanded composer in chat") : fail("Chat composer controls missing");
 
+    (await page.evaluate(() => {
+      const btn = document.getElementById("attachBtn");
+      return btn ? btn.getBoundingClientRect().width : 999;
+    })) <= 40
+      ? ok("Attach button keeps compact size") : fail("Attach button stretched in composer");
+
     const sendDisabled = await page.locator("#sendBtn").isDisabled();
     sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
 

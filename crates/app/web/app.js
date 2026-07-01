@@ -2128,7 +2128,6 @@ searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
   if (state.view === "workspaces") renderWorkspaceTree();
 });
-$("micBtn").addEventListener("click", () => toast("Voice input not available"));
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
   renderWorkspaceTree();

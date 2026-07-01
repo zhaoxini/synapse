@@ -75,33 +75,32 @@
       </div>
     </div>
     <footer id="composer">
-    <div id="composerDock">
-      <div id="composerRow">
-        <button id="attachBtn" class="dock-btn dock-plus" aria-label="More">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        </button>
-        <textarea id="input" rows="1" placeholder="Plan, ask, build…"
-          autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true"
-          enterkeyhint="send" aria-autocomplete="none" data-1p-ignore data-lpignore="true"
-          data-form-type="other" name="synapse-message" readonly></textarea>
-        <button id="micBtn" class="dock-btn dock-mic" aria-label="Voice">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="6" y="2" width="4" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M4 7.5a4 4 0 008 0M8 11.5V14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-        </button>
-        <div id="composerControls">
-          <button class="dock-btn dock-text" id="modelCtl"><span id="modelLabel">Auto</span></button>
-          <span class="spacer"></span>
-          <button id="sendBtn" aria-label="Send">
-            <svg class="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/></svg>
-          </button>
+      <div id="composerDock">
+        <div id="composerRow">
+          <div class="composer-field">
+            <button id="attachBtn" class="dock-btn dock-plus" aria-label="More">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            </button>
+            <textarea id="input" rows="1" placeholder="Plan, ask, build…"
+              autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true"
+              enterkeyhint="send" aria-autocomplete="none" data-1p-ignore data-lpignore="true"
+              data-form-type="other" name="synapse-message" readonly></textarea>
+          </div>
+          <div id="composerControls">
+            <button class="dock-btn dock-text" id="modelCtl"><span id="modelLabel">Auto</span></button>
+            <span class="spacer"></span>
+            <button id="sendBtn" aria-label="Send">
+              <svg class="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor"/></svg>
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      <div id="attachMenu" class="model-menu"></div>
     </footer>
   </div>
 
   <div id="localMenu" class="model-menu"></div>
-  <div id="attachMenu" class="model-menu"></div>
 
   <div id="sheetMask"></div>
   <div id="bottomSheet">
