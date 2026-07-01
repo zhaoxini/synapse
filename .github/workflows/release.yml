@@ -102,6 +102,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/synapse-relay.exe" "$stage/bin/"
           Copy-Item scripts/SERVER-README.md "$stage/README.md"
           Copy-Item scripts/install-server.sh "$stage/install.sh"
+          Copy-Item scripts/synapse-server-wrapper.sh "$stage/synapse-server-wrapper.sh"
           Copy-Item scripts/install.sh "$stage/install-remote.sh"
           Set-Content "$stage/VERSION" $version
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
@@ -141,3 +142,31 @@ jobs:
           generate_release_notes: true
           files: dist/**/*
           body_path: scripts/RELEASE-NOTES.md
+
+  sync-mirror:
+    name: sync China install mirror
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ secrets.RELAY_SSH_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refresh zx0623.duckdns.org release cache
+        env:
+          RELAY_SSH: ${{ secrets.RELAY_SSH }}
+          RELAY_SSH_KEY: ${{ secrets.RELAY_SSH_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$RELAY_SSH_KEY" > ~/.ssh/relay_key
+          chmod 600 ~/.ssh/relay_key
+          host="${RELAY_SSH#*@}"
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
+          scp -i ~/.ssh/relay_key -o StrictHostKeyChecking=accept-new \
+            scripts/install.sh scripts/install-relay.sh \
+            scripts/sync-mirror-vps.sh scripts/synapse-server-wrapper.sh \
+            "${RELAY_SSH}:/opt/synapse/scripts/"
+          ssh -i ~/.ssh/relay_key -o StrictHostKeyChecking=accept-new "${RELAY_SSH}" \
+            "chmod +x /opt/synapse/scripts/sync-mirror-vps.sh && \
+             SYNAPSE_ROOT=/opt/synapse SYNAPSE_VERSION=${TAG} SYNAPSE_FORCE_SYNC=1 \
+             bash /opt/synapse/scripts/sync-mirror-vps.sh"

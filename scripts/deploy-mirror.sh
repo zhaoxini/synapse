@@ -7,7 +7,7 @@ set -euo pipefail
 
 RELAY_SSH="${RELAY_SSH:-root@192.3.179.202}"
 RELAY_HOST="${RELAY_HOST:-zx0623.duckdns.org}"
-VERSION="${SYNAPSE_VERSION:-v0.2.1}"
+VERSION="${SYNAPSE_VERSION:-v0.2.5}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 info() { printf '==> %s\n' "$*"; }
@@ -16,8 +16,12 @@ info "Upload mirror scripts to ${RELAY_SSH}..."
 ssh "${RELAY_SSH}" "mkdir -p /opt/synapse/scripts /opt/synapse/mirror"
 scp "${ROOT}/scripts/install.sh" "${ROOT}/scripts/install-relay.sh" \
   "${ROOT}/scripts/sync-mirror-vps.sh" "${ROOT}/scripts/vps-sync-web.sh" \
+  "${ROOT}/scripts/synapse-server-wrapper.sh" \
   "${RELAY_SSH}:/opt/synapse/scripts/"
-ssh "${RELAY_SSH}" 'chmod +x /opt/synapse/scripts/sync-mirror-vps.sh /opt/synapse/scripts/vps-sync-web.sh && SYNAPSE_ROOT=/opt/synapse bash /opt/synapse/scripts/sync-mirror-vps.sh'
+ssh "${RELAY_SSH}" \
+  "chmod +x /opt/synapse/scripts/sync-mirror-vps.sh /opt/synapse/scripts/vps-sync-web.sh && \
+   SYNAPSE_ROOT=/opt/synapse SYNAPSE_VERSION=${VERSION} SYNAPSE_FORCE_SYNC=${SYNAPSE_FORCE_SYNC:-1} \
+   bash /opt/synapse/scripts/sync-mirror-vps.sh"
 
 info "Verify mirror..."
 curl -fsS "https://${RELAY_HOST}/install.sh" | head -3

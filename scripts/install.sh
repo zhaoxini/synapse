@@ -22,7 +22,6 @@ REPO="${SYNAPSE_REPO:-zhaoxini/synapse}"
 VERSION="${SYNAPSE_VERSION:-latest}"
 MIRROR="${SYNAPSE_MIRROR:-https://zx0623.duckdns.org}"
 TMPDIR_INSTALL=""
-WRAPPER_FILE=""
 
 info() { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -66,23 +65,39 @@ curl_get() {
 
 curl_get_file() {
   local url="$1" out="$2"
-  local archive try
-  if [ -n "${MIRROR}" ] && [[ "${url}" == *"/releases/download/"* ]]; then
-    archive="${url##*/}"
+  local archive github_url try
+
+  archive="${url##*/}"
+  if [[ "${url}" == https://github.com/* ]]; then
+    github_url="${url}"
+  elif [[ "${url}" == *"/releases/download/"* ]]; then
+    github_url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
+  else
+    github_url="${url}"
+  fi
+
+  # 1) VPS static cache (fast when synced after each release)
+  if [ -n "${MIRROR}" ]; then
     try="${MIRROR}/releases/${archive}"
-    if curl -fsSL "${try}" -o "${out}"; then
+    if curl -fsSL "${try}" -o "${out}" 2>/dev/null; then
       return 0
     fi
   fi
-  if curl -fsSL "${url}" -o "${out}"; then
+
+  # 2) GitHub Releases CDN (works even when ghrel proxy is down)
+  if curl -fsSL -L "${github_url}" -o "${out}" 2>/dev/null; then
     return 0
   fi
-  if [ -n "${MIRROR}" ] && [[ "${url}" == "$(release_base)"/* ]]; then
-    curl -fsSL "${MIRROR}/ghrel${url#$(release_base)}" -o "${out}" && return 0
+
+  # 3) ghrel mirror (fallback when GitHub is blocked)
+  if [ -n "${MIRROR}" ]; then
+    try="${MIRROR}/ghrel/${REPO}/releases/download/${VERSION}/${archive}"
+    if curl -fsSL "${try}" -o "${out}" 2>/dev/null; then
+      return 0
+    fi
   fi
-  if [ -n "${MIRROR}" ] && [[ "${url}" == https://github.com/* ]]; then
-    curl -fsSL "${MIRROR}/ghrel${url#https://github.com}" -o "${out}" && return 0
-  fi
+
+  warn "download failed for ${archive} (tried: mirror /releases, GitHub, ghrel)"
   return 1
 }
 
@@ -134,45 +149,21 @@ pick_install_dir() {
   echo "${HOME}/.local/bin"
 }
 
-prepare_wrapper() {
-  local dest="$1"
-  WRAPPER_FILE="${dest}/synapse-server-wrapper.sh"
-
-  sibling="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/synapse-server-wrapper.sh" 2>/dev/null || true
-  if [ -n "${sibling}" ] && [ -f "${sibling}" ]; then
-    cp "${sibling}" "${WRAPPER_FILE}"
-    chmod 755 "${WRAPPER_FILE}"
-    return 0
-  fi
-
-  if [ -n "${MIRROR}" ]; then
-    if curl -fsSL "${MIRROR}/scripts/synapse-server-wrapper.sh" -o "${WRAPPER_FILE}" 2>/dev/null; then
-      chmod 755 "${WRAPPER_FILE}"
-      return 0
-    fi
-  fi
-
-  if curl -fsSL \
-    "https://raw.githubusercontent.com/${REPO}/master/scripts/synapse-server-wrapper.sh" \
-    -o "${WRAPPER_FILE}" 2>/dev/null; then
-    chmod 755 "${WRAPPER_FILE}"
-    return 0
-  fi
-
-  die "could not fetch synapse-server-wrapper.sh"
-}
-
 install_bins() {
-  local dest="$1" root="$2" use_sudo=""
+  local dest="$1" root="$2" use_sudo="" wrapper="${root}/synapse-server-wrapper.sh"
   if [ "${dest}" = "__sudo__/usr/local/bin" ]; then
     dest="/usr/local/bin"
     use_sudo="sudo"
   fi
+  [ -f "${wrapper}" ] || die "broken release: missing synapse-server-wrapper.sh in tarball"
+  head -1 "${wrapper}" | grep -q '^#!' \
+    || die "broken release: synapse-server-wrapper.sh is not a shell script"
   mkdir -p "${dest}"
-  prepare_wrapper "${TMPDIR_INSTALL}"
   ${use_sudo} install -m 755 "${root}/bin/synapse-server" "${dest}/synapse-server.real"
   ${use_sudo} install -m 755 "${root}/bin/synapse-relay" "${dest}/synapse-relay"
-  ${use_sudo} install -m 755 "${WRAPPER_FILE}" "${dest}/synapse-server"
+  ${use_sudo} install -m 755 "${wrapper}" "${dest}/synapse-server"
+  head -1 "${dest}/synapse-server" | grep -q '^#!' \
+    || die "install failed: ${dest}/synapse-server is not a shell script"
   echo "${dest}"
 }
 
@@ -187,7 +178,7 @@ main() {
   resolve_version
   ver_no="${VERSION#v}"
   archive="synapse-${ver_no}-${target}.tar.gz"
-  url="$(release_base)/${REPO}/releases/download/${VERSION}/${archive}"
+  url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
 
   info "Synapse installer"
   info "Release:  ${VERSION} (${target})"

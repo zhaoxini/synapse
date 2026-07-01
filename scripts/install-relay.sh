@@ -60,23 +60,36 @@ curl_get() {
 
 curl_get_file() {
   local url="$1" out="$2"
-  local archive try
-  if [ -n "${MIRROR}" ] && [[ "${url}" == *"/releases/download/"* ]]; then
-    archive="${url##*/}"
+  local archive github_url try
+
+  archive="${url##*/}"
+  if [[ "${url}" == https://github.com/* ]]; then
+    github_url="${url}"
+  elif [[ "${url}" == *"/releases/download/"* ]]; then
+    github_url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
+  else
+    github_url="${url}"
+  fi
+
+  if [ -n "${MIRROR}" ]; then
     try="${MIRROR}/releases/${archive}"
-    if curl -fsSL "${try}" -o "${out}"; then
+    if curl -fsSL "${try}" -o "${out}" 2>/dev/null; then
       return 0
     fi
   fi
-  if curl -fsSL "${url}" -o "${out}"; then
+
+  if curl -fsSL -L "${github_url}" -o "${out}" 2>/dev/null; then
     return 0
   fi
-  if [ -n "${MIRROR}" ] && [[ "${url}" == "$(release_base)"/* ]]; then
-    curl -fsSL "${MIRROR}/ghrel${url#$(release_base)}" -o "${out}" && return 0
+
+  if [ -n "${MIRROR}" ]; then
+    try="${MIRROR}/ghrel/${REPO}/releases/download/${VERSION}/${archive}"
+    if curl -fsSL "${try}" -o "${out}" 2>/dev/null; then
+      return 0
+    fi
   fi
-  if [ -n "${MIRROR}" ] && [[ "${url}" == https://github.com/* ]]; then
-    curl -fsSL "${MIRROR}/ghrel${url#https://github.com}" -o "${out}" && return 0
-  fi
+
+  warn "download failed for ${archive} (tried: mirror /releases, GitHub, ghrel)"
   return 1
 }
 
@@ -166,7 +179,7 @@ install_binary() {
   resolve_version
   ver_no="${VERSION#v}"
   archive="synapse-${ver_no}-${target}.tar.gz"
-  url="$(release_base)/${REPO}/releases/download/${VERSION}/${archive}"
+  url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
 
   info "Downloading ${VERSION} (${target})..."
   [ -n "${MIRROR}" ] && info "Mirror:   ${MIRROR}"

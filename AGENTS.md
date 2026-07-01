@@ -26,6 +26,40 @@ Server-only changes (`crates/server/**`) don't need an app rebuild — rebuild +
 
 Always verify on the real surface (the sim app), not just a browser tab.
 
+## Release + install mirror (do not skip)
+
+User install path: `curl -fsSL https://zx0623.duckdns.org/install.sh | bash` → downloads from mirror, not GitHub directly.
+
+**Every version tag (`v*`) must include mirror sync.** Pushing the GitHub Release alone is **not** enough — users will get 404/502 until the VPS cache is updated.
+
+### Failure pattern (seen repeatedly)
+
+1. Tag + GitHub Release published (e.g. v0.2.4).
+2. VPS `/opt/synapse/mirror/releases/` still has old version → `GET /releases/synapse-<ver>-<target>.tar.gz` returns **404**.
+3. Old `install.sh` fell through to `ghrel` proxy → **502** (nginx backend unreliable).
+4. Old `install.sh` did **not** fall back to GitHub CDN → install fails entirely.
+
+### Checklist after every release
+
+1. **Sync mirror on VPS** (required before telling users to install):
+   ```sh
+   SYNAPSE_VERSION=v0.2.x ./scripts/deploy-mirror.sh   # needs RELAY_SSH key
+   ```
+   Or on VPS: `SYNAPSE_VERSION=v0.2.x SYNAPSE_FORCE_SYNC=1 bash /opt/synapse/scripts/sync-mirror-vps.sh`
+2. **Verify** both URLs return 200:
+   - `https://zx0623.duckdns.org/releases/synapse-<ver>-aarch64-apple-darwin.tar.gz`
+   - `https://zx0623.duckdns.org/install.sh` (updated script)
+3. **Smoke-test install**: `curl -fsSL https://zx0623.duckdns.org/install.sh | bash`
+4. **CI**: `.github/workflows/release.yml` `sync-mirror` job needs `RELAY_SSH` + `RELAY_SSH_KEY` secrets so future tags auto-sync.
+
+### `install.sh` download order (must keep)
+
+When `SYNAPSE_MIRROR` is set: **mirror `/releases/` cache → GitHub Releases CDN (`-L`) → `ghrel` proxy last**. Never use `ghrel` as primary or skip GitHub fallback — `ghrel` breaks often.
+
+### Wrapper script (bundled in every release tarball)
+
+Each platform tarball ships `synapse-server-wrapper.sh` at the top level. `install.sh` **only** installs that file as `synapse-server` — never fetches wrapper from mirror or GitHub. If install fails, re-run the official installer; do not hand-patch `/usr/local/bin/synapse-server`.
+
 **iOS hybrid (SwiftUI shell + web chat):** `mobile/ios/Sources/*.swift` — native workspaces/nav; web loads with `?shell=native`. Browser/Pages still use the full web bundle.
 
 ## Web UI design system

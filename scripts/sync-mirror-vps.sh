@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="${SYNAPSE_ROOT:-/opt/synapse}"
 MIRROR="${SYNAPSE_MIRROR_ROOT:-/opt/synapse/mirror}"
-VERSION="${SYNAPSE_VERSION:-v0.2.4}"
+VERSION="${SYNAPSE_VERSION:-v0.2.5}"
 
 mkdir -p "${MIRROR}/install" "${MIRROR}/releases" "${MIRROR}/scripts"
 
@@ -21,7 +21,7 @@ fi
 ver="${VERSION#v}"
 for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
   f="synapse-${ver}-${target}.tar.gz"
-  if [[ ! -f "${MIRROR}/releases/${f}" ]]; then
+  if [[ "${SYNAPSE_FORCE_SYNC:-0}" = "1" ]] || [[ ! -f "${MIRROR}/releases/${f}" ]]; then
     echo "Downloading ${f}..."
     curl -fsSL -L "https://github.com/zhaoxini/synapse/releases/download/${VERSION}/${f}" \
       -o "${MIRROR}/releases/${f}" || echo "warning: could not fetch ${f}" >&2
