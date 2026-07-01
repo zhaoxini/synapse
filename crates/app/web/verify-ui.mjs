@@ -99,19 +99,28 @@ async function main() {
     await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
     ok("Workspaces view is default");
 
+    (await page.locator("#profileBtn").isVisible())
+      ? ok("Profile button on workspaces header") : fail("Profile button missing");
+
     (await page.locator("#pageTitle").textContent()) === "Workspaces"
       ? ok("Workspaces page title") : fail("Workspaces title missing");
 
     !(await page.locator(".ws-row", { hasText: "All Repos" }).count())
-      ? ok("No duplicate All Repos node") : fail("All Repos aggregate should be removed");
+      ? fail("All Repos row missing") : ok("All Repos row shown");
 
-    (await page.locator(".ws-row").count()) >= 1
+    (await page.locator(".ws-row").count()) >= 2
       ? ok("Workspace rows rendered") : fail("Workspace rows missing");
+
+    (await page.locator("#addRepoRow").count()) > 0
+      ? ok("Add Repo row shown") : fail("Add Repo row missing");
+
+    (await page.locator(".ws-icon").count()) >= 1
+      ? ok("Folder icons on rows") : fail("Folder icons missing");
 
     !(await page.locator("#workspaceList .sess-row").count())
       ? ok("Sessions not inline on main list") : fail("Sessions should only appear in drawer");
 
-    await page.locator(".ws-row").first().click();
+    await page.locator(".ws-row:not(.ws-add-repo):not([data-all-repos])").first().click();
     await page.waitForTimeout(200);
     (await page.locator("#sessionDrawer.show").count()) > 0
       ? ok("Session drawer opens on workspace tap") : fail("Session drawer missing");
@@ -124,8 +133,11 @@ async function main() {
     !(await page.locator("#drawerBody .tree-new-row").count())
       ? ok("No new session row in drawer") : fail("Drawer should not show new session row");
 
-    !(await page.locator("#composer").isVisible())
-      ? ok("Composer hidden on workspaces list") : fail("Composer should be hidden on workspaces list");
+    (await page.locator("#composer").isVisible())
+      ? ok("Composer visible on workspaces list") : fail("Composer should be visible on workspaces list");
+
+    (await page.locator("#micBtn").isVisible())
+      ? ok("Mic button on home composer") : fail("Mic button missing on home composer");
 
     await page.locator("#drawerClose").click();
     await page.waitForTimeout(150);
@@ -136,8 +148,8 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
       ? ok("+ stays on workspaces list") : fail("+ should not leave workspaces list");
     (await page.locator("#bottomSheet.show").count()) > 0
-      && (await page.locator("#sheetTitle").textContent()) === "Add workspace"
-      ? ok("+ opens add workspace sheet") : fail("+ should open add workspace sheet");
+      && (await page.locator("#sheetTitle").textContent()) === "Add Repo"
+      ? ok("+ opens add repo sheet") : fail("+ should open add repo sheet");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
     await page.locator("#sheetClose").click();
@@ -156,7 +168,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
 
-    await page.locator(".ws-row").first().click();
+    await page.locator(".ws-row:not(.ws-add-repo):not([data-all-repos])").first().click();
     await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.spark").count()) > 0

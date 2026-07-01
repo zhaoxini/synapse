@@ -27,9 +27,11 @@ export default function App() {
           </div>
         </div>
 
-        <div id="pageHead">
-          <h1 id="pageTitle">Workspaces</h1>
-          <div className="page-actions">
+        <div id="wsToolbar" className="ws-toolbar">
+          <button type="button" id="profileBtn" className="iconbtn iconbtn-glass profile-btn" aria-label="Profile">
+            <img src="logo.svg" width="20" height="20" alt="" />
+          </button>
+          <div className="ws-toolbar-actions">
             <button id="searchBtn" className="iconbtn iconbtn-glass" aria-label="Search">
               <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
                 <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.7" />
@@ -42,6 +44,10 @@ export default function App() {
               </svg>
             </button>
           </div>
+        </div>
+
+        <div id="pageHead">
+          <h1 id="pageTitle">Workspaces</h1>
         </div>
 
         <div id="searchWrap" className="hidden">
@@ -101,51 +107,58 @@ export default function App() {
             </div>
           </div>
         </div>
-        <footer id="composer">
-          <div id="composerDock">
-            <div id="composerRow">
-              <div className="composer-field">
-                <button id="attachBtn" className="dock-btn dock-plus" aria-label="More">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                  </svg>
-                </button>
-                <textarea
-                  id="input"
-                  rows={1}
-                  placeholder="Plan, ask, build…"
-                  autoComplete="off"
-                  autoCorrect="on"
-                  autoCapitalize="sentences"
-                  spellCheck
-                  enterKeyHint="send"
-                  aria-autocomplete="none"
-                  data-1p-ignore=""
-                  data-lpignore="true"
-                  data-form-type="other"
-                  name="synapse-message"
-                  readOnly
-                />
-              </div>
-              <div id="composerControls">
-                <button type="button" className="dock-btn dock-text" id="modelCtl">
-                  <span id="modelLabel">Auto</span>
-                </button>
-                <span className="spacer" />
-                <button type="button" id="sendBtn" aria-label="Send">
-                  <svg className="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <svg className="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor" />
-                  </svg>
-                </button>
-              </div>
+      </div>
+
+      <footer id="composer">
+        <div id="composerDock">
+          <div id="composerRow">
+            <div className="composer-field">
+              <button id="attachBtn" className="dock-btn dock-plus" aria-label="More">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </button>
+              <textarea
+                id="input"
+                rows={1}
+                placeholder="Plan, ask, build…"
+                autoComplete="off"
+                autoCorrect="on"
+                autoCapitalize="sentences"
+                spellCheck
+                enterKeyHint="send"
+                aria-autocomplete="none"
+                data-1p-ignore=""
+                data-lpignore="true"
+                data-form-type="other"
+                name="synapse-message"
+                readOnly
+              />
+              <button type="button" id="micBtn" className="dock-btn dock-mic" aria-label="Voice input">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <rect x="5.5" y="2" width="5" height="8" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
+                  <path d="M3.5 8a4.5 4.5 0 009 0M8 12.5V14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div id="composerControls">
+              <button type="button" className="dock-btn dock-text" id="modelCtl">
+                <span id="modelLabel">Auto</span>
+              </button>
+              <span className="spacer" />
+              <button type="button" id="sendBtn" aria-label="Send">
+                <svg className="ico-send" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 12V4M8 4L4.5 7.5M8 4l3.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <svg className="ico-stop" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor" />
+                </svg>
+              </button>
             </div>
           </div>
-          <div id="attachMenu" className="model-menu" />
-        </footer>
-      </div>
+        </div>
+        <div id="attachMenu" className="model-menu" />
+      </footer>
 
       <div id="localMenu" className="model-menu" />
 

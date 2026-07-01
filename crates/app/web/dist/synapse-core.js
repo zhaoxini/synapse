@@ -1840,9 +1840,21 @@ function workspacePaths() {
   });
 }
 
+function workspaceLabel(path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  if (parts.length >= 2) return parts.slice(-2).join("/");
+  return parts[parts.length - 1] || path || "";
+}
+
 function renderSessionDrawerBody(path) {
   const body = $("drawerBody");
-  if (!body || normalizePath(state.sessionDrawerWorkspace) !== normalizePath(path)) return;
+  if (!body) return;
+  const cur = state.sessionDrawerWorkspace;
+  if (path === ALL_REPOS) {
+    if (cur !== ALL_REPOS) return;
+  } else if (normalizePath(cur) !== normalizePath(path)) {
+    return;
+  }
   body.innerHTML = "";
 
   const pending = normalizePath(state.pendingCwd);
@@ -1868,6 +1880,16 @@ function renderSessionDrawerBody(path) {
 }
 
 function openSessionDrawer(path) {
+  if (path === ALL_REPOS) {
+    state.sessionDrawerWorkspace = ALL_REPOS;
+    $("drawerTitle").textContent = "All Repos";
+    renderSessionDrawerBody(ALL_REPOS);
+    $("drawerMask").classList.add("show");
+    $("sessionDrawer").classList.add("show");
+    $("sessionDrawer").setAttribute("aria-hidden", "false");
+    haptic("light");
+    return;
+  }
   const norm = normalizePath(path);
   if (!norm) return;
   state.sessionDrawerWorkspace = norm;
@@ -1890,7 +1912,11 @@ function filteredSessions(workspacePath) {
   const q = (state.searchQuery || "").toLowerCase();
   return state.sessions
     .filter(s => state.showArchived ? s.archived : !s.archived)
-    .filter(s => !workspacePath || normalizePath(s.cwd) === workspacePath)
+    .filter(s => {
+      if (workspacePath === ALL_REPOS) return true;
+      if (!workspacePath) return true;
+      return normalizePath(s.cwd) === normalizePath(workspacePath);
+    })
     .filter(s => {
       if (!q) return true;
       const title = cleanTitle(s.name).toLowerCase();
@@ -1905,6 +1931,10 @@ function filteredSessions(workspacePath) {
 
 const SPARK_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l1.6 3.8L17.5 8l-3.9 1.7L12 13.5 10.4 9.7 6.5 8l3.9-1.7L12 2.5z" fill="currentColor"/><circle cx="5.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="18.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="12" cy="21" r="1.5" fill="currentColor" opacity=".75"/></svg>`;
 const ARCHIVE_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12v10a1 1 0 01-1 1H5a1 1 0 01-1-1V6z" stroke="currentColor" stroke-width="1.4"/><path d="M3 6h14M8 6V4h4v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 10h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+const ALL_REPOS = "__all__";
+const FOLDER_SVG = `<span class="ws-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 012-2h5l2 2h9a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></span>`;
+const FOLDER_ADD_SVG = `<span class="ws-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 012-2h5l2 2h9a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 10v4M10 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>`;
+const WS_CHEV_SVG = `<span class="ws-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 
 function formatNum(n) {
   return (n || 0).toLocaleString("en-US");
@@ -1955,39 +1985,49 @@ function renderWorkspaceList() {
   }
 
   const paths = workspacePaths();
-  if (!paths.length && !q) {
-    const hint = document.createElement("div");
-    hint.className = "empty-hint";
-    hint.innerHTML = `No workspaces yet<br><span class="empty-hint-sub">Tap + to add a workspace</span>`;
-    list.appendChild(hint);
-    return;
+  let any = false;
+
+  if (!q || "all repos".includes(q)) {
+    const allRow = document.createElement("div");
+    allRow.className = "ws-row";
+    allRow.dataset.allRepos = "1";
+    allRow.innerHTML = FOLDER_SVG + `<span class="ws-name">All Repos</span>` + WS_CHEV_SVG;
+    allRow.addEventListener("click", () => openSessionDrawer(ALL_REPOS));
+    list.appendChild(allRow);
+    any = true;
   }
 
-  let any = false;
   for (const path of paths) {
-    const label = basename(path);
+    const label = workspaceLabel(path);
     const sessions = filteredSessions(path);
     if (q) {
-      const labelMatch = label.toLowerCase().includes(q);
+      const labelMatch = label.toLowerCase().includes(q) || basename(path).toLowerCase().includes(q);
       const sessionMatch = sessions.length > 0;
       if (!labelMatch && !sessionMatch) continue;
     }
 
     any = true;
-    const count = sessions.length;
-    const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
     const row = document.createElement("div");
     row.className = "ws-row";
     row.innerHTML =
+      FOLDER_SVG +
       `<span class="ws-name">${escapeHtml(label)}</span>` +
-      countHtml +
-      `<span class="ws-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+      WS_CHEV_SVG;
     row.title = path;
     row.addEventListener("click", () => openSessionDrawer(path));
     list.appendChild(row);
   }
 
-  if (state.sessionDrawerWorkspace) renderSessionDrawerBody(state.sessionDrawerWorkspace);
+  const addRow = document.createElement("div");
+  addRow.className = "ws-row ws-add-repo";
+  addRow.id = "addRepoRow";
+  addRow.innerHTML = FOLDER_ADD_SVG + `<span class="ws-name">Add Repo</span>`;
+  addRow.addEventListener("click", () => openAddWorkspace());
+  list.appendChild(addRow);
+
+  if (state.sessionDrawerWorkspace) {
+    renderSessionDrawerBody(state.sessionDrawerWorkspace);
+  }
 
   if (!any && q) {
     const hint = document.createElement("div");
@@ -2062,7 +2102,7 @@ function openWorkspacePickerSheet(onPick) {
   wrap.appendChild(list);
 
   $("bottomSheet").classList.add("sheet-picker");
-  openSheet("Add workspace", wrap);
+  openSheet("Add Repo", wrap);
   requestAnimationFrame(() => inp.focus());
 }
 
@@ -2478,6 +2518,8 @@ $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
+const micBtn = $("micBtn");
+if (micBtn) micBtn.addEventListener("click", () => toast("Voice input coming soon"));
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
 if (!NATIVE_SHELL) connect();
 else if (creds()) connect();
