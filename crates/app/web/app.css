@@ -45,6 +45,12 @@
   --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, monospace;
 
   --topbar-h: 44px;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-heavy: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(60, 60, 67, 0.14);
+  --glass-btn: rgba(120, 120, 128, 0.14);
+  --glass-btn-hover: rgba(120, 120, 128, 0.22);
+  --glass-btn-active: rgba(120, 120, 128, 0.28);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --kb: 0px;
@@ -64,27 +70,81 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
 textarea { font: inherit; }
 
-/* ---------- top bar ---------- */
+/* ---------- app header (iOS large title + glass) ---------- */
+#appHeader {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: var(--safe-top);
+  background: var(--glass-bg-heavy);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 0.5px solid var(--glass-border);
+}
+
 #topbar {
-  flex: 0 0 auto; min-height: calc(var(--topbar-h) + var(--safe-top));
-  padding: var(--safe-top) 16px 0;
+  min-height: var(--topbar-h);
+  padding: 0 12px 0 8px;
   display: flex; align-items: center; justify-content: space-between;
-  background: var(--surface);
   position: relative;
 }
-.topbar-left, .topbar-right {
+.topbar-left {
   display: flex; align-items: center; min-height: var(--topbar-h); z-index: 1;
 }
-.topbar-left { flex: 0 0 auto; margin-left: -6px; }
-.topbar-right { flex: 0 0 auto; margin-right: -6px; }
-.topbar-actions {
-  display: flex; align-items: center; gap: 2px;
+
+#pageHead {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 2px 16px 10px;
+  min-height: 44px;
 }
+#pageTitle {
+  flex: 1 1 auto; min-width: 0;
+  margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.02em;
+  color: var(--ink); line-height: 1.08;
+}
+.page-actions {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  align-self: center;
+  padding-top: 4px;
+}
+
 .iconbtn {
-  width: 44px; height: 44px; color: var(--ink);
+  width: 36px; height: 36px; color: var(--ink);
   display: flex; align-items: center; justify-content: center;
-  border-radius: 50%; transition: background .15s, transform .1s, color .15s;
+  border-radius: 50%; transition: background .15s, transform .1s, color .15s, box-shadow .15s;
 }
+.iconbtn-glass {
+  background: var(--glass-btn);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.55);
+}
+.iconbtn-glass:hover { background: var(--glass-btn-hover); }
+.iconbtn-glass:active {
+  transform: scale(0.94);
+  background: var(--glass-btn-active);
+}
+.iconbtn.active {
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  box-shadow: none;
+}
+
+.chat-title {
+  position: absolute; left: 52px; right: 16px;
+  text-align: center; font-weight: 600; font-size: 17px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+body.mode-chat .chat-title { display: block !important; }
+body.mode-chat #pageHead { display: none; }
+body.mode-workspaces #topbar { display: none; }
+body.mode-workspaces #pageHead { display: flex; }
+body.mode-chat #topbar { display: flex; }
+body.mode-chat #backBtn { display: flex !important; }
+body.mode-chat #searchWrap { display: none !important; }
+
+/* legacy filled buttons (composer attach, etc.) */
 .iconbtn-filled::before {
   content: "";
   position: absolute;
@@ -94,41 +154,23 @@ textarea { font: inherit; }
 }
 .iconbtn-filled { position: relative; }
 .iconbtn-filled > * { position: relative; z-index: 1; }
-.iconbtn:hover::before { background: var(--btn-secondary-hover); }
-.iconbtn:active { transform: scale(0.94); }
-.iconbtn.active { color: var(--accent-text); }
-.iconbtn.active::before { background: var(--accent-bg); }
-
-/* ---------- page title (large, below topbar) ---------- */
-.chat-title {
-  position: absolute; left: 16px; right: 16px;
-  text-align: center; font-weight: 600; font-size: 17px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  pointer-events: none;
-}
-body.mode-chat .chat-title { display: block !important; }
-body.mode-chat #pageHead { display: none; }
-body.mode-workspaces #backBtn { display: none !important; }
-body.mode-workspaces .topbar-actions { display: flex !important; }
-body.mode-chat #backBtn { display: flex !important; }
-body.mode-chat .topbar-actions { display: none !important; }
-
-#pageHead { flex: 0 0 auto; padding: 2px 16px 12px; background: var(--bg); }
-#pageTitle {
-  margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.02em;
-  color: var(--ink); line-height: 1.1;
-}
-body.mode-chat #pageHead { display: none; }
+.iconbtn-filled:hover::before { background: var(--btn-secondary-hover); }
+.iconbtn-filled:active { transform: scale(0.94); }
+.iconbtn-filled.active { color: var(--accent-text); }
+.iconbtn-filled.active::before { background: var(--accent-bg); }
 
 /* ---------- search bar ---------- */
 #searchWrap {
-  flex: 0 0 auto; padding: 0 16px 10px; background: var(--bg);
+  flex: 0 0 auto; padding: 0 16px 10px;
+  background: transparent;
 }
 #searchWrap.hidden { display: none; }
 .search-field {
-  display: flex; align-items: center; gap: 6px;
-  height: 36px; padding: 0 12px; border-radius: 18px;
-  background: var(--btn-secondary);
+  display: flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 12px; border-radius: 12px;
+  background: var(--glass-btn);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.55);
+  border: 0.5px solid rgba(60, 60, 67, 0.08);
 }
 .search-field-icon {
   flex: 0 0 16px; color: var(--ink-3);
@@ -158,8 +200,7 @@ body.mode-chat #pageHead { display: none; }
 
 /* ---------- view modes ---------- */
 body.mode-workspaces #chatView { display: none; }
-body.mode-chat #workspaceView,
-body.mode-chat #pageHead { display: none; }
+body.mode-chat #workspaceView { display: none; }
 
 #workspaceView, #chatView {
   animation: viewIn .2s ease-out;

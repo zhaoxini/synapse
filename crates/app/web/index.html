@@ -11,38 +11,38 @@
   <link rel="stylesheet" href="app.css" />
 </head>
 <body class="mode-workspaces">
-  <header id="topbar">
-    <div class="topbar-left">
-      <button id="backBtn" class="iconbtn iconbtn-filled" aria-label="Back" hidden>
-        <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+  <header id="appHeader">
+    <div id="topbar">
+      <div class="topbar-left">
+        <button id="backBtn" class="iconbtn iconbtn-glass" aria-label="Back" hidden>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div id="chatTitle" class="chat-title" hidden>Chat</div>
     </div>
-    <div id="chatTitle" class="chat-title" hidden>Chat</div>
-    <div class="topbar-right">
-      <div class="topbar-actions">
-        <button id="searchBtn" class="iconbtn iconbtn-filled" aria-label="Search">
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+
+    <div id="pageHead">
+      <h1 id="pageTitle">Repos</h1>
+      <div class="page-actions">
+        <button id="searchBtn" class="iconbtn iconbtn-glass" aria-label="Search">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.7"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
-        <button id="newBtn" class="iconbtn iconbtn-filled" aria-label="Add repo">
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <button id="newBtn" class="iconbtn iconbtn-glass" aria-label="Add repo">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
+      </div>
+    </div>
+
+    <div id="searchWrap" class="hidden">
+      <div class="search-field">
+        <svg class="search-field-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <input id="searchInput" type="search" placeholder="Search" autocomplete="off" />
       </div>
     </div>
   </header>
 
   <div id="reconnect">Reconnecting…</div>
   <div id="toast"><span id="toastText"></span><button id="toastClose">✕</button></div>
-
-  <div id="searchWrap" class="hidden">
-    <div class="search-field">
-      <svg class="search-field-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      <input id="searchInput" type="search" placeholder="Search" autocomplete="off" />
-    </div>
-  </div>
-
-  <div id="pageHead">
-    <h1 id="pageTitle">Repos</h1>
-  </div>
 
   <!-- Repo sections (each repo's sessions listed inline) -->
   <section id="workspaceView">
