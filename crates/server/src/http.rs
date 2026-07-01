@@ -413,6 +413,23 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                     .send(Message::Text(json!({"type":"cwds","cwds":cwds}).to_string()))
                     .await;
             }
+            "register_project" => {
+                let path = cmd.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                match state.manager.register_project(path).await {
+                    Ok(cwds) => {
+                        let _ = out_tx
+                            .send(Message::Text(json!({"type":"cwds","cwds":cwds}).to_string()))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"error","error":e,"op":"register_project"}).to_string(),
+                            ))
+                            .await;
+                    }
+                }
+            }
             _ => {}
         }
     }
