@@ -42,6 +42,12 @@ struct Args {
     /// Public hostname shown to clients (for pairing URLs). Defaults to --host.
     #[arg(long)]
     public_host: Option<String>,
+    /// Public port shown to clients (when behind a reverse proxy). Defaults to --port.
+    #[arg(long)]
+    public_port: Option<u16>,
+    /// Public TLS flag shown to clients (when TLS terminates at a reverse proxy).
+    #[arg(long, default_value_t = false)]
+    public_tls: bool,
     #[arg(long)]
     tls_cert: Option<PathBuf>,
     #[arg(long)]
@@ -88,13 +94,15 @@ async fn main() -> Result<()> {
         .public_host
         .clone()
         .unwrap_or_else(|| args.host.clone());
+    let public_port = args.public_port.unwrap_or(args.port);
+    let public_tls = args.public_tls || tls;
 
     let ws_state = AppState {
         db: db.clone(),
         registry: registry.clone(),
         public_host: public_host.clone(),
-        public_port: args.port,
-        tls,
+        public_port,
+        tls: public_tls,
     };
 
     let app = api::router()
