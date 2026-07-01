@@ -99,39 +99,36 @@ async function main() {
     (await page.locator("#pageTitle").textContent()) === "Workspaces"
       ? ok("Workspaces page title") : fail("Workspaces title missing");
 
-    (await page.locator(".ws-row").count()) >= 3
-      ? ok("Workspace rows rendered") : fail("Workspace rows missing");
+    (await page.locator(".ws-row").count()) >= 2
+      ? ok("Workspace tree rows rendered") : fail("Workspace tree rows missing");
 
-    (await page.locator("#composer").isVisible())
-      ? ok("Composer visible on workspaces") : fail("Composer missing on workspaces");
+    (await page.locator(".ws-tree-children .sess-row").count()) > 0
+      ? ok("Sessions nested in workspace tree") : fail("Tree sessions missing");
 
-    (await page.locator("#input").getAttribute("placeholder"))?.includes("Plan")
-      ? ok("List composer placeholder") : fail("Wrong composer placeholder");
+    !(await page.locator("#composer").isVisible())
+      ? ok("Composer hidden on workspaces") : fail("Composer should be hidden on workspaces");
 
     const sessBefore = await page.evaluate(() => window.__synapse.state.sessions.length);
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-chat")))
-      ? ok("+ opens draft chat") : fail("+ should open draft chat, not create session");
+    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
+      ? ok("+ stays on workspaces") : fail("+ should not leave workspaces");
+    (await page.locator("#localMenu.show").count()) > 0
+      ? ok("+ opens add repo menu") : fail("+ should open add repo menu");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
-      ? ok("No session added until first message") : fail("+ prematurely created a session");
+      ? ok("No session added from +") : fail("+ prematurely created a session");
+    await page.evaluate(() => document.getElementById("localMenu").classList.remove("show"));
+
+    await page.locator(".tree-new-row").first().click();
+    await page.waitForTimeout(200);
+    (await page.evaluate(() => document.body.classList.contains("mode-chat")))
+      ? ok("New session opens draft chat") : fail("New session should open draft chat");
+    (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
+      ? ok("No session added until first message") : fail("New session prematurely created");
     (await page.locator("#empty .brand img[src='logo.svg']").count()) > 0
       ? ok("Synapse logo on empty state") : fail("Logo missing on empty state");
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
-    await page.locator("#backBtn").click();
-    await page.waitForTimeout(200);
-
-    await page.locator(".ws-row", { hasText: "synapse" }).click();
-    await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
-      ? ok("Opens session list for repo") : fail("Session list not opened");
-
-    (await page.locator("#pageTitle").textContent()) === "synapse"
-      ? ok("Repo title shown") : fail("Repo title wrong");
-
-    (await page.locator(".s-time", { hasText: "Today" }).count()) > 0
-      ? ok("Today section rendered") : fail("Today section missing");
 
     (await page.locator(".sess-icon.spark").count()) > 0
       ? ok("Working session sparkle icon") : fail("Sparkle icon missing");
@@ -143,7 +140,7 @@ async function main() {
       ? ok("Inline archive button on rows") : fail("Archive button missing");
 
     // chat + skeleton (use idle session)
-    await page.locator(".sess-row").nth(1).click();
+    await page.locator(".ws-tree-children .sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);
@@ -153,6 +150,12 @@ async function main() {
 
     (await page.locator("#composerControls").isVisible())
       ? ok("Expanded composer in chat") : fail("Chat composer controls missing");
+
+    (await page.evaluate(() => {
+      const btn = document.getElementById("attachBtn");
+      return btn ? btn.getBoundingClientRect().width : 999;
+    })) <= 40
+      ? ok("Attach button keeps compact size") : fail("Attach button stretched in composer");
 
     const sendDisabled = await page.locator("#sendBtn").isDisabled();
     sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
@@ -198,13 +201,8 @@ async function main() {
 
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
-      ? ok("Back returns to session list") : fail("Back did not return to list");
-
-    await page.locator("#backBtn").click();
-    await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Back returns to workspaces") : fail("Back did not return to workspaces");
+      ? ok("Back returns to workspace tree") : fail("Back did not return to tree");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");
