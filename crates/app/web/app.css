@@ -87,9 +87,10 @@ textarea { font: inherit; }
 .iconbtn.active { background: var(--btn-secondary-hover); color: var(--accent-text); }
 .avatar-btn {
   width: 36px; height: 36px; border-radius: 50%;
-  background: #1c1c1e; color: #fff;
+  background: transparent; padding: 0; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
+.avatar-btn img { display: block; width: 100%; height: 100%; border-radius: 50%; }
 .avatar-btn:active { transform: scale(0.94); }
 .chat-title {
   position: absolute; left: 56px; right: 56px;
@@ -480,26 +481,45 @@ body.mode-chat #sessionView { display: none; }
   50% { opacity: 1; transform: scaleX(1); }
 }
 
-/* ---------- empty state — Synara: logo + "Let's build" ---------- */
+/* ---------- empty state (new session / draft chat) ---------- */
 #empty {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 20px; pointer-events: none;
-  padding-bottom: 80px;
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  padding: 24px 28px calc(100px + var(--safe-bottom));
+  pointer-events: none;
 }
 #empty.hidden { display: none; }
+.empty-inner {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; width: 100%; max-width: 340px;
+}
 #empty .brand {
-  width: 44px; height: 44px; border-radius: 12px; background: var(--btn-secondary);
-  color: var(--ink-2); font-size: 22px; display: flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; border-radius: 14px; overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
 }
-#empty h1 { font-size: 22px; font-weight: 600; margin: 0; color: var(--ink); }
-#empty p { color: var(--ink-3); font-size: 15px; margin: 0; }
-#empty .suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 300px; pointer-events: auto; margin-top: 4px; }
+#empty .brand img { display: block; width: 100%; height: 100%; }
+#empty h1 {
+  margin: 0 0 6px; font-size: 28px; font-weight: 700;
+  letter-spacing: -0.02em; color: var(--ink); line-height: 1.15;
+}
+#empty p {
+  margin: 0; font-size: 15px; color: var(--ink-2); line-height: 1.4;
+}
+#empty p:empty { display: none; }
+#empty .suggestions {
+  display: flex; flex-direction: column; gap: 8px; width: 100%;
+  pointer-events: auto; margin-top: 28px;
+}
 #empty .suggestions button {
-  height: 40px; border-radius: var(--radius-card); background: transparent;
-  border: 1px solid var(--border-light); font-size: 13px; text-align: left; padding: 0 14px;
-  color: var(--ink-2); transition: background .15s, color .15s, border-color .15s;
+  width: 100%; min-height: 44px; padding: 11px 16px;
+  border-radius: 12px; background: var(--btn-secondary); border: 0;
+  font-size: 15px; text-align: center; color: var(--ink);
+  transition: background .15s, transform .1s;
 }
-#empty .suggestions button:hover { background: var(--btn-secondary); color: var(--ink); border-color: var(--border); }
+#empty .suggestions button:active {
+  background: var(--btn-secondary-hover); transform: scale(0.98);
+}
 
 /* ---------- composer — floating pill ---------- */
 #composer {
