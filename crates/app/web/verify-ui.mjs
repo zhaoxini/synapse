@@ -125,6 +125,9 @@ async function main() {
     (await page.locator(".sess-sub.working").count()) > 0
       ? ok("Working status on busy session") : fail("Working status missing");
 
+    (await page.locator(".sess-archive-btn").count()) > 0
+      ? ok("Inline archive button on rows") : fail("Archive button missing");
+
     // chat + skeleton (use idle session)
     await page.locator(".sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
