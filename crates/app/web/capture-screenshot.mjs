@@ -15,7 +15,8 @@ const OUT = process.env.SYNAPSE_SCREENSHOT_DIR || "/opt/cursor/artifacts/screens
 function mockSessions() {
   const now = Date.now();
   return [
-    { id: "s1", name: "UI check", cwd: "/workspace/synapse", state: "idle", started_at: now, pinned: false, archived: false, diff_adds: 5, diff_dels: 1 },
+    { id: "s1", name: "Development environment setup", cwd: "/workspace/synapse", state: "busy", started_at: now, pinned: false, archived: false, diff_adds: 0, diff_dels: 0 },
+    { id: "s2", name: "Ui 交互优化", cwd: "/workspace/synapse", state: "error", started_at: now - 3600000, pinned: false, archived: false, diff_adds: 1063, diff_dels: 207 },
   ];
 }
 
@@ -64,11 +65,15 @@ async function main() {
     }, WS_PORT);
     await page.reload();
     await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(OUT, "01-sessions.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "01-workspaces.png"), fullPage: false });
+
+    await page.locator(".ws-row", { hasText: "synapse" }).click();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(OUT, "02-sessions.png"), fullPage: false });
 
     await page.locator(".sess-row").first().click();
     await page.waitForTimeout(500);
-    await page.screenshot({ path: path.join(OUT, "02-chat.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "03-chat.png"), fullPage: false });
 
     console.log(`Screenshots saved to ${OUT}`);
   } finally {
