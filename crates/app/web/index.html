@@ -28,7 +28,7 @@
       <button id="menuBtn" class="iconbtn iconbtn-filled" aria-label="Menu" hidden>
         <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M4 6h12M4 10h12M4 14h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       </button>
-      <button id="newBtn" class="iconbtn iconbtn-filled" aria-label="New session">
+      <button id="newBtn" class="iconbtn iconbtn-filled" aria-label="Add repo">
         <svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       </button>
     </div>
@@ -45,15 +45,10 @@
     <h1 id="pageTitle">Workspaces</h1>
   </div>
 
-  <!-- Workspaces root -->
+  <!-- Workspace tree (repos + sessions) -->
   <section id="workspaceView">
-    <div id="workspaceList"></div>
-  </section>
-
-  <!-- Session list for a repo -->
-  <section id="sessionView">
     <div id="pullRefresh" class="hidden" aria-hidden="true"><span class="pull-spin"></span><span class="pull-label">Release to refresh</span></div>
-    <div id="sessionList"></div>
+    <div id="workspaceList"></div>
     <button type="button" id="archivedToggle" class="archived-toggle hidden">Show archived</button>
   </section>
 
@@ -77,10 +72,7 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <!-- Shared composer (list + chat) -->
-  <footer id="composer">
+    <footer id="composer">
     <div id="composerDock">
       <div id="composerRow">
         <button id="attachBtn" class="dock-btn dock-plus" aria-label="More">
@@ -103,9 +95,11 @@
         </div>
       </div>
     </div>
-    <div id="localMenu" class="model-menu"></div>
-    <div id="attachMenu" class="model-menu"></div>
-  </footer>
+    </footer>
+  </div>
+
+  <div id="localMenu" class="model-menu"></div>
+  <div id="attachMenu" class="model-menu"></div>
 
   <div id="sheetMask"></div>
   <div id="bottomSheet">

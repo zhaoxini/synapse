@@ -103,12 +103,8 @@ body.mode-chat #pageHead { display: none; }
 body.mode-workspaces #backBtn,
 body.mode-workspaces #menuBtn { display: none !important; }
 body.mode-workspaces #workspaceAvatar,
+body.mode-workspaces #searchBtn,
 body.mode-workspaces #newBtn { display: flex !important; }
-body.mode-sessions #backBtn,
-body.mode-sessions #searchBtn,
-body.mode-sessions #menuBtn { display: flex !important; }
-body.mode-sessions #workspaceAvatar,
-body.mode-sessions #newBtn { display: none !important; }
 body.mode-chat #backBtn { display: flex !important; }
 body.mode-chat #workspaceAvatar,
 body.mode-chat #menuBtn,
@@ -151,32 +147,21 @@ body.mode-chat #pageHead { display: none; }
 #toastClose { width: 22px; height: 22px; color: #fff; font-size: 12px; margin-right: 10px; }
 
 /* ---------- view modes ---------- */
-body.mode-workspaces #sessionView,
 body.mode-workspaces #chatView { display: none; }
-body.mode-sessions #workspaceView,
-body.mode-sessions #chatView { display: none; }
 body.mode-chat #workspaceView,
-body.mode-chat #sessionView { display: none; }
+body.mode-chat #pageHead { display: none; }
 
-#workspaceView, #sessionView, #chatView {
+#workspaceView, #chatView {
   animation: viewIn .2s ease-out;
 }
 #workspaceView {
-  flex: 1 1 0; overflow-y: auto; background: var(--bg);
-  padding-bottom: calc(8px + var(--safe-bottom));
-}
-@keyframes viewIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-#sessionView {
   flex: 1 1 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg);
 }
-#sessionList {
+#workspaceList {
   flex: 1 1 0; overflow-y: auto; padding: 0 0 8px;
   overscroll-behavior-y: contain;
+  padding-bottom: calc(8px + var(--safe-bottom));
 }
 #pullRefresh {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -220,7 +205,22 @@ body.mode-chat #sessionView { display: none; }
   flex: 1; min-width: 0; font-size: 17px; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ws-chev { color: var(--ink-3); flex: 0 0 auto; }
+.ws-chev { color: var(--ink-3); flex: 0 0 auto; transition: transform .15s; }
+.ws-row.expanded .ws-chev { transform: rotate(90deg); }
+
+.ws-tree-children { background: var(--bg); }
+.tree-new-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px 12px 52px; cursor: pointer;
+  color: var(--accent-text); font-size: 16px; font-weight: 500;
+  border-bottom: 1px solid var(--border-light);
+}
+.tree-new-row:active { background: var(--btn-secondary); }
+.ws-tree-children .sess-row-wrap { border-bottom: 1px solid var(--border-light); }
+.ws-tree-children .sess-row {
+  padding-left: 52px;
+}
+.ws-tree-children .empty-hint { padding: 24px 20px 24px 52px; }
 
 /* time section headers */
 .s-time {
@@ -541,22 +541,16 @@ body.mode-chat #sessionView { display: none; }
   border-color: var(--border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 }
-body:not(.mode-chat) #composerRow { flex-wrap: nowrap; }
-body:not(.mode-chat) #composerControls { display: none !important; }
-body:not(.mode-chat) #micBtn { display: flex !important; }
-body.mode-chat #micBtn { display: none !important; }
 body.mode-chat #composerRow {
   flex-direction: column; align-items: stretch; gap: 10px;
   padding: 14px 14px 10px; border-radius: 22px;
 }
+body.mode-chat #micBtn { display: none !important; }
 #input {
   border: 0; background: none; resize: none; outline: none;
   flex: 1 1 0; min-width: 0; width: 100%;
   max-height: 160px; padding: 6px 4px; line-height: 1.45; color: var(--ink);
   font-size: 16px;
-}
-body:not(.mode-chat) #input {
-  max-height: 36px; padding: 8px 2px;
 }
 #input::placeholder { color: var(--ink-3); }
 #composerControls { display: flex; align-items: center; gap: 4px; padding: 0; width: 100%; }
