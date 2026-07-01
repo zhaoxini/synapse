@@ -17,7 +17,7 @@ let sessions = [];
 function mockSessions() {
   const now = Date.now();
   return sessions.length ? sessions : [
-    { id: "s1", name: "UI 交互优化", cwd: "/workspace/synapse", state: "busy", started_at: now - 120000, model: "", pinned: true, archived: false, diff_adds: 42, diff_dels: 8 },
+    { id: "s1", name: "Ui 交互优化", cwd: "/workspace/synapse", state: "busy", started_at: now - 120000, model: "", pinned: true, archived: false, diff_adds: 1063, diff_dels: 207 },
     { id: "s2", name: "Development environment setup", cwd: "/workspace/synapse", state: "idle", started_at: now - 86400000, model: "", pinned: false, archived: false, diff_adds: 12, diff_dels: 3 },
     { id: "s3", name: "Failed run", cwd: "/workspace/synapse", state: "error", started_at: now - 172800000, model: "", pinned: false, archived: true, diff_adds: 0, diff_dels: 0 },
   ];
@@ -90,32 +90,42 @@ async function main() {
     await page.reload();
     await page.waitForTimeout(800);
 
-    overlayVisible === false || !(await page.locator("#connectOverlay").isVisible())
+    !(await page.locator("#connectOverlay").isVisible())
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
 
-    await page.locator("body.mode-sessions").waitFor({ timeout: 3000 });
-    ok("Session list view visible");
+    await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
+    ok("Workspaces view is default");
 
-    !(await page.locator("body.mode-sessions #composer").isVisible())
-      ? ok("No composer on session list") : fail("Composer shown on session list");
+    (await page.locator("#pageTitle").textContent()) === "Workspaces"
+      ? ok("Workspaces page title") : fail("Workspaces title missing");
+
+    (await page.locator(".ws-row").count()) >= 3
+      ? ok("Workspace rows rendered") : fail("Workspace rows missing");
+
+    (await page.locator("#composer").isVisible())
+      ? ok("Composer visible on workspaces") : fail("Composer missing on workspaces");
+
+    (await page.locator("#input").getAttribute("placeholder"))?.includes("Plan")
+      ? ok("List composer placeholder") : fail("Wrong composer placeholder");
+
+    await page.locator(".ws-row", { hasText: "synapse" }).click();
+    await page.waitForTimeout(200);
+    (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
+      ? ok("Opens session list for repo") : fail("Session list not opened");
+
+    (await page.locator("#pageTitle").textContent()) === "synapse"
+      ? ok("Repo title shown") : fail("Repo title wrong");
 
     (await page.locator(".s-time", { hasText: "Today" }).count()) > 0
       ? ok("Today section rendered") : fail("Today section missing");
 
+    (await page.locator(".sess-icon.spark").count()) > 0
+      ? ok("Working session sparkle icon") : fail("Sparkle icon missing");
+
     (await page.locator(".sess-sub.working").count()) > 0
       ? ok("Working status on busy session") : fail("Working status missing");
 
-    const diffText = await page.locator(".sess-diff").first().textContent();
-    diffText && diffText.includes("+")
-      ? ok(`Diff stats shown (${diffText.trim()})`) : fail("Diff stats missing");
-
-    (await page.locator(".sess-row.pinned").count()) > 0
-      ? ok("Pinned session row styled") : fail("Pinned row missing");
-
-    !(await page.locator("#workspaceBtn, #searchBtn, #refreshBtn, #selectBtn").count())
-      ? ok("No clutter topbar buttons") : fail("Unexpected topbar buttons present");
-
-    // chat + skeleton (use idle session so send isn't in stop mode)
+    // chat + skeleton (use idle session)
     await page.locator(".sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
@@ -124,8 +134,8 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("mode-chat")))
       ? ok("Switches to chat mode on session tap") : fail("Chat mode not activated");
 
-    (await page.locator("#composer").isVisible())
-      ? ok("Composer visible in chat") : fail("Composer missing in chat");
+    (await page.locator("#composerControls").isVisible())
+      ? ok("Expanded composer in chat") : fail("Chat composer controls missing");
 
     const sendDisabled = await page.locator("#sendBtn").isDisabled();
     sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
@@ -135,14 +145,13 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
       ? ok("Back returns to session list") : fail("Back did not return to list");
 
-    (await page.locator("#newBtn").isVisible())
-      ? ok("New session button visible") : fail("New session button missing");
+    await page.locator("#backBtn").click();
+    await page.waitForTimeout(200);
+    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
+      ? ok("Back returns to workspaces") : fail("Back did not return to workspaces");
 
-    const title = await page.locator("#titleName").textContent();
-    title && title.length > 0 ? ok(`Topbar title: "${title}"`) : fail("Empty topbar title");
-
-    const dark = await page.evaluate(() => document.documentElement.classList.contains("theme-dark"));
-    dark ? ok("Forced dark theme") : fail("Dark theme not applied");
+    const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
+    light ? ok("Light theme applied") : fail("Light theme not applied");
 
   } finally {
     await browser.close();

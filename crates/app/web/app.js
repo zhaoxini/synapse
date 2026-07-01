@@ -18,7 +18,10 @@ const scroller = $("scroller");
 const emptyEl = $("empty");
 const inputEl = $("input");
 const sendBtn = $("sendBtn");
-const titleName = $("titleName");
+const pageTitle = $("pageTitle");
+const chatTitle = $("chatTitle");
+const searchWrap = $("searchWrap");
+const searchInput = $("searchInput");
 
 const state = {
   ws: null,
@@ -26,7 +29,10 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
-  view: "sessions", // "sessions" | "chat"
+  view: "workspaces", // "workspaces" | "sessions" | "chat"
+  activeCwd: null,    // null = all repos
+  searchOpen: false,
+  searchQuery: "",
   creating: false,
   loadingHistory: false,
   showArchived: false,
@@ -181,7 +187,7 @@ function doConnect(first) {
     if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
     hideConnectOverlay();
     $("reconnect").classList.remove("show");
-    showSessions();
+    showWorkspaces();
     // prime session list
     send({ op: "list" });
     if (first) {
@@ -247,6 +253,7 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
+      if (state.view === "workspaces") renderWorkspaces();
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -257,7 +264,8 @@ function handle(v) {
     case "event": handleEvent(v.event); break;
     case "error":
       state.creating = false;
-      renderSessions();
+      if (state.view === "workspaces") renderWorkspaces();
+      else renderSessions();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -280,8 +288,9 @@ function handleEvent(evt) {
     const i = state.sessions.findIndex(x => x.id === evt.sessionId);
     if (i >= 0) state.sessions.splice(i, 1);
     if (evt.sessionId === state.activeId) {
-      state.activeId = ""; clearMessages(); titleName.textContent = workspaceName(); setBusy(false);
+      state.activeId = ""; clearMessages(); setBusy(false);
       showSessions();
+      updateChrome();
     }
     renderSessions();
     return;
@@ -1401,7 +1410,8 @@ function updatePulse() {
 // =================== sessions ===================
 function setSessions(list) {
   state.sessions = list || [];
-  renderSessions();
+  if (state.view === "workspaces") renderWorkspaces();
+  else renderSessions();
   // After a server restart, auto-created sessions come back with new ids, so a
   // still-selected old id is now dead — requesting its history returns found:false
   // and the view stays stuck on the welcome page. Drop the dead id and fall through
@@ -1410,12 +1420,13 @@ function setSessions(list) {
     state.activeId = "";
     if (state.view === "chat") showSessions();
   }
-  updateTopbar();
+  updateChrome();
 }
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
-  renderSessions();
+  if (state.view === "workspaces") renderWorkspaces();
+  else renderSessions();
 }
 // Track a session's running state from live turn_started/turn_stopped (broadcast
 // for every session) so the drawer dot and busy-on-open stay correct even for
@@ -1425,7 +1436,7 @@ function setSessionState(id, st) {
   if (!ses || ses.state === st) return;
   ses.state = st;
   renderSessions();
-  if (id === state.activeId && state.view === "chat") updateTopbar();
+  if (id === state.activeId && state.view === "chat") updateChrome();
 }
 // Session titles come from the transcript's first user line, which is often
 // command/hook boilerplate (/goal stop-hooks, continuation summaries, local-
@@ -1511,7 +1522,62 @@ function showRowContext(s) {
 }
 document.addEventListener("click", closeRowMenu);
 
+function workspacePaths() {
+  const paths = new Set(state.cwds || []);
+  for (const s of state.sessions) if (s.cwd) paths.add(s.cwd);
+  return [...paths].sort();
+}
+
+const FOLDER_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 8h6l2 2h8v10H4V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+const FOLDER_ADD_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 8h6l2 2h8v9H4V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 13v4M10 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const SPARK_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l1.6 3.8L17.5 8l-3.9 1.7L12 13.5 10.4 9.7 6.5 8l3.9-1.7L12 2.5z" fill="currentColor"/><circle cx="5.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="18.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="12" cy="21" r="1.5" fill="currentColor" opacity=".75"/></svg>`;
+
+function formatNum(n) {
+  return (n || 0).toLocaleString("en-US");
+}
+
+function sessionIconHtml(s) {
+  if (s.state === "busy") return `<span class="sess-icon spark">${SPARK_SVG}</span>`;
+  return `<span class="sess-icon dot"></span>`;
+}
+
+function renderWorkspaces() {
+  const list = $("workspaceList");
+  if (!list) return;
+  list.innerHTML = "";
+  const q = (state.searchQuery || "").toLowerCase();
+  const add = (label, icon, fn, chevron = true) => {
+    if (q && !label.toLowerCase().includes(q)) return;
+    const row = document.createElement("div");
+    row.className = "ws-row";
+    row.innerHTML =
+      `<span class="ws-icon">${icon}</span>` +
+      `<span class="ws-label">${escapeHtml(label)}</span>` +
+      (chevron ? `<span class="ws-chev"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : "");
+    row.addEventListener("click", fn);
+    list.appendChild(row);
+  };
+  add("All Repos", FOLDER_SVG, () => openWorkspace(null));
+  for (const p of workspacePaths()) add(basename(p), FOLDER_SVG, () => openWorkspace(p));
+  add("Add Repo", FOLDER_ADD_SVG, () => openAddRepo(), false);
+}
+
+function openWorkspace(cwd) {
+  state.activeCwd = cwd;
+  if (cwd) state.pendingCwd = cwd;
+  showSessions();
+}
+
+function openAddRepo() {
+  openLocalMenu((path) => {
+    state.pendingCwd = path;
+    if (!state.cwds.includes(path)) state.cwds.push(path);
+    openWorkspace(path);
+  });
+}
+
 function workspaceName() {
+  if (state.activeCwd) return basename(state.activeCwd);
   const sorted = [...state.sessions].sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
   const cwd = sorted[0] && sorted[0].cwd;
   return cwd ? basename(cwd) : "Synapse";
@@ -1534,14 +1600,19 @@ function diffSubtitle(s) {
   const d = s.diff_dels || 0;
   if (!a && !d) return "";
   let html = "";
-  if (a) html += `<span class="sess-diff">+${a}</span>`;
-  if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${d}</span>`;
+  if (a) html += `<span class="sess-diff add">+${formatNum(a)}</span>`;
+  if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${formatNum(d)}</span>`;
   return html;
 }
 
 function sessionSubtitle(s) {
   if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
-  if (s.state === "error") return { text: "Check failed", cls: "error", html: "" };
+  if (s.state === "error") {
+    const diff = diffSubtitle(s);
+    const err = `<span class="fail-mark">✗</span> 1 Check Failed`;
+    const html = diff ? `${err} · ${diff}` : err;
+    return { text: "", cls: "error", html };
+  }
   const diff = diffSubtitle(s);
   const t = s.started_at || 0;
   const time = t ? relTime(t) : "";
@@ -1552,31 +1623,50 @@ function sessionSubtitle(s) {
 
 let navFromPop = false;
 
+function showWorkspaces() {
+  state.view = "workspaces";
+  document.body.classList.remove("mode-sessions", "mode-chat");
+  document.body.classList.add("mode-workspaces");
+  updateChrome();
+  renderWorkspaces();
+}
+
 function showSessions() {
   state.view = "sessions";
+  document.body.classList.remove("mode-workspaces", "mode-chat");
   document.body.classList.add("mode-sessions");
-  document.body.classList.remove("mode-chat");
-  updateTopbar();
+  updateChrome();
   renderSessions();
 }
 
 function showChat(pushHistory) {
   state.view = "chat";
-  document.body.classList.remove("mode-sessions");
+  document.body.classList.remove("mode-workspaces", "mode-sessions");
   document.body.classList.add("mode-chat");
-  updateTopbar();
+  updateChrome();
   if (pushHistory !== false && !navFromPop) {
     history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
   }
   requestAnimationFrame(() => { if (inputEl) inputEl.focus(); });
 }
 
-function updateTopbar() {
-  if (state.view === "sessions") {
-    titleName.textContent = workspaceName();
+function updateChrome() {
+  const q = state.searchQuery || "";
+  if (searchInput && searchInput.value !== q) searchInput.value = q;
+  searchWrap.classList.toggle("hidden", !state.searchOpen);
+  if (state.view === "workspaces") {
+    pageTitle.textContent = "Workspaces";
+    chatTitle.hidden = true;
+    inputEl.placeholder = "Plan, ask, build…";
+  } else if (state.view === "sessions") {
+    pageTitle.textContent = state.activeCwd ? basename(state.activeCwd) : "All Repos";
+    chatTitle.hidden = true;
+    inputEl.placeholder = "Plan, ask, build…";
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
-    titleName.textContent = s ? cleanTitle(s.name) : "Chat";
+    chatTitle.textContent = s ? cleanTitle(s.name) : "Chat";
+    chatTitle.hidden = false;
+    inputEl.placeholder = "Follow up…";
   }
 }
 
@@ -1639,6 +1729,11 @@ function renderSessions() {
 
   const f = state.sessions
     .filter(s => state.showArchived ? s.archived : !s.archived)
+    .filter(s => !state.activeCwd || s.cwd === state.activeCwd)
+    .filter(s => {
+      const q = (state.searchQuery || "").toLowerCase();
+      return !q || cleanTitle(s.name).toLowerCase().includes(q);
+    })
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
       return (b.started_at || 0) - (a.started_at || 0);
@@ -1657,6 +1752,7 @@ function renderSessions() {
     const row = document.createElement("div");
     row.className = "sess-row creating";
     row.innerHTML =
+      sessionIconHtml({ state: "busy" }) +
       `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
       `<div class="sess-sub working">Working</div></div>`;
     const head = document.createElement("div");
@@ -1696,6 +1792,7 @@ function renderSessions() {
         : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
       const pin = s.pinned ? `<span class="sess-pin" aria-label="Pinned">★</span>` : "";
       row.innerHTML =
+        sessionIconHtml(s) +
         `<div class="sess-body">` +
           `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
           subHtml +
@@ -1724,7 +1821,6 @@ function select(id) {
   state.activeId = id;
   const s = state.sessions.find(x => x.id === id);
   if (s) {
-    titleName.textContent = cleanTitle(s.name);
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
@@ -1757,7 +1853,7 @@ function updateSend() {
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && state.view === "chat") {
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault(); doSend();
   }
 });
@@ -1770,9 +1866,10 @@ function doSend() {
   if (!text) return;
   inputEl.value = ""; autoGrow();
   haptic("light");
+  if (state.view !== "chat") {
+    if (state.activeCwd) state.pendingCwd = state.activeCwd;
+  }
   if (!state.activeId) {
-    // No session yet: start one (in the selected model/repo) and send the
-    // message into it once it's created. Type-and-send always works.
     state.pendingSend = text;
     newSession();
     return;
@@ -1786,8 +1883,12 @@ function doSend() {
 // =================== navigation ===================
 $("backBtn").addEventListener("click", () => {
   haptic("light");
-  if (history.state && history.state.synapse === "chat") history.back();
-  else showSessions();
+  if (state.view === "chat") {
+    if (history.state && history.state.synapse === "chat") history.back();
+    else showSessions();
+  } else if (state.view === "sessions") {
+    showWorkspaces();
+  }
 });
 window.addEventListener("popstate", () => {
   if (state.view === "chat") {
@@ -1796,7 +1897,32 @@ window.addEventListener("popstate", () => {
     navFromPop = false;
   }
 });
-$("newBtn").addEventListener("click", newSession);
+$("workspaceAvatar").addEventListener("click", () => { haptic("light"); showWorkspaces(); });
+$("newBtn").addEventListener("click", () => { haptic("light"); newSession(); });
+$("searchBtn").addEventListener("click", () => {
+  haptic("light");
+  state.searchOpen = !state.searchOpen;
+  updateChrome();
+  if (state.searchOpen) searchInput.focus();
+});
+searchInput.addEventListener("input", () => {
+  state.searchQuery = searchInput.value.trim();
+  if (state.view === "workspaces") renderWorkspaces();
+  else if (state.view === "sessions") renderSessions();
+});
+$("menuBtn").addEventListener("click", () => {
+  haptic("light");
+  const archivedAny = state.sessions.some(s => s.archived);
+  if (archivedAny) {
+    state.showArchived = !state.showArchived;
+    renderSessions();
+    toast(state.showArchived ? "Showing archived" : "Hiding archived");
+  } else {
+    send({ op: "refresh" });
+    toast("Refreshed");
+  }
+});
+$("micBtn").addEventListener("click", () => toast("Voice input not available"));
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
   renderSessions();
@@ -1806,10 +1932,12 @@ function newSession() {
   if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
-  if (state.pendingCwd) opts.cwd = state.pendingCwd;
+  const cwd = state.pendingCwd || state.activeCwd || workspacePaths()[0];
+  if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   state.creating = true;
-  renderSessions();
+  if (state.view === "workspaces") showSessions();
+  else if (state.view === "sessions") renderSessions();
   send({ op: "create", opts });
 }
 
@@ -1907,16 +2035,17 @@ $("modelCtl").addEventListener("click", (e) => {
 // not in the discovered list), then the discovered git repos. openMenu() bails
 // with a toast on an empty list — which would hide the input — so this one is
 // bespoke. The input and the rows both lead to chooseCwd(), same as a pick.
-function openLocalMenu() {
+function openLocalMenu(onPick) {
   closeMenus();
   const menu = $("localMenu");
   menu.innerHTML = "";
+  const pick = onPick || ((path) => chooseCwd(path));
   const inp = document.createElement("input");
   inp.className = "path-input";
   inp.placeholder = "输入路径，如 ~/code/foo";
   inp.addEventListener("click", (e) => e.stopPropagation());
   inp.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { const p = inp.value.trim(); if (p) chooseCwd(p); }
+    if (e.key === "Enter") { const p = inp.value.trim(); if (p) pick(p); }
   });
   menu.appendChild(inp);
   const cur = currentCwd();
@@ -1925,7 +2054,7 @@ function openLocalMenu() {
     row.className = "model-item" + (p === cur ? " sel" : "");
     row.innerHTML = `<span>${escapeHtml(basename(p))}</span>`;
     row.title = p;
-    row.addEventListener("click", (e) => { e.stopPropagation(); chooseCwd(p); });
+    row.addEventListener("click", (e) => { e.stopPropagation(); pick(p); });
     menu.appendChild(row);
   }
   menu.classList.add("show");
