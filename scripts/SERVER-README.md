@@ -76,6 +76,18 @@ curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install-
 
 Default relay domain: `wss://zx0623.duckdns.org` (baked into release `synapse-server` builds).
 
+### Admin: create user accounts
+
+Public self-registration is disabled. On the relay VPS, create accounts with:
+
+```sh
+synapse-relay user --db /var/lib/synapse/relay.db add you@example.com --password 'your-password'
+synapse-relay user --db /var/lib/synapse/relay.db list
+synapse-relay user --db /var/lib/synapse/relay.db del you@example.com
+```
+
+Then give the email + password to the user for `synapse-server` / the mobile app sign-in.
+
 Manual setup:
 
 ```sh

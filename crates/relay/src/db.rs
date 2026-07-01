@@ -82,13 +82,37 @@ impl Db {
         name: &str,
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, email, password_hash, name, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_users(&self) -> Result<Vec<User>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, email, name FROM users ORDER BY created_at")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(User {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                name: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn delete_user_by_email(&self, email: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
+        Ok(n > 0)
+    }
+
+    pub fn delete_session(&self, token: &str) -> Result<()> {
         self.conn
             .lock()
             .unwrap()
-            .execute(
-                "INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, email, password_hash, name, now],
-            )?;
+            .execute("DELETE FROM sessions WHERE token = ?1", params![token])?;
         Ok(())
     }
 

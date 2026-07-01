@@ -22,7 +22,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 }
 
 pub fn validate_email(email: &str) -> Result<()> {
-    if email.contains('@') && email.len() >= 3 {
+    if email.contains('@') && email.contains('.') && email.len() >= 3 {
         Ok(())
     } else {
         bail!("invalid email")
@@ -58,3 +58,5 @@ pub fn new_pairing_code() -> String {
     let mut rng = rand::thread_rng();
     format!("{:06}", rng.gen_range(0..1_000_000))
 }
+
+pub const SESSION_DAYS: i64 = 30;

@@ -102,6 +102,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/synapse-relay.exe" "$stage/bin/"
           Copy-Item scripts/SERVER-README.md "$stage/README.md"
           Copy-Item scripts/install-server.sh "$stage/install.sh"
+          Copy-Item scripts/synapse-server-wrapper.sh "$stage/synapse-server-wrapper.sh"
           Copy-Item scripts/install.sh "$stage/install-remote.sh"
           Set-Content "$stage/VERSION" $version
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force

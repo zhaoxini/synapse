@@ -41,6 +41,13 @@ impl AppConfig {
     }
 
     pub fn clear() -> Result<()> {
+        if let Ok(Some(cfg)) = Self::load() {
+            let client = reqwest::Client::new();
+            let _ = client
+                .post(format!("{}/api/v1/auth/logout", cfg.relay_api))
+                .header("Authorization", format!("Bearer {}", cfg.session_token))
+                .send();
+        }
         let path = Self::path();
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -92,8 +99,6 @@ pub fn relay_urls(relay: &str) -> Result<(String, String, String, u16, bool)> {
 struct AuthBody<'a> {
     email: &'a str,
     password: &'a str,
-    #[serde(skip_serializing_if = "str::is_empty")]
-    name: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -139,42 +144,11 @@ impl AccountClient {
         }
     }
 
-    pub async fn register(relay: &str, email: &str, password: &str, name: &str) -> Result<Self> {
-        let (api, ws, _host, _port, _tls) = relay_urls(relay)?;
-        let auth: AuthResp = reqwest::Client::new()
-            .post(format!("{api}/api/v1/auth/register"))
-            .json(&AuthBody {
-                email,
-                password,
-                name,
-            })
-            .send()
-            .await?
-            .error_for_status()
-            .context("register failed")?
-            .json()
-            .await?;
-        let cfg = AppConfig {
-            relay_api: api,
-            relay_ws: ws,
-            relay_host: auth.relay_host,
-            relay_port: auth.relay_port,
-            relay_tls: auth.relay_tls,
-            session_token: auth.session_token,
-            user_email: auth.user.email,
-        };
-        Ok(Self::from_config(cfg))
-    }
-
     pub async fn login(relay: &str, email: &str, password: &str) -> Result<Self> {
         let (api, ws, _host, _port, _tls) = relay_urls(relay)?;
         let auth: AuthResp = reqwest::Client::new()
             .post(format!("{api}/api/v1/auth/login"))
-            .json(&AuthBody {
-                email,
-                password,
-                name: "",
-            })
+            .json(&AuthBody { email, password })
             .send()
             .await?
             .error_for_status()

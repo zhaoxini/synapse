@@ -252,16 +252,7 @@ pub fn run_app() -> anyhow::Result<()> {
         refresh_devices_ui(&app.as_weak(), cfg);
     }
 
-    // --- account: sign in / register ---
-    {
-        let weak = app.as_weak();
-        app.on_authToggleMode(move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_isRegister(!app.get_isRegister());
-                app.set_pairingError("".into());
-            }
-        });
-    }
+    // --- account: sign in (admin-created accounts) ---
     {
         let weak = app.as_weak();
         app.on_authSubmit(move || {
@@ -272,17 +263,11 @@ pub fn run_app() -> anyhow::Result<()> {
             let relay = app.get_relayUrl().to_string();
             let email = app.get_authEmail().to_string();
             let password = app.get_authPassword().to_string();
-            let name = app.get_authName().to_string();
-            let register = app.get_isRegister();
             app.set_connecting(true);
             app.set_pairingError("".into());
             let weak = weak.clone();
             spawn_account_task(weak.clone(), async move {
-                let result = if register {
-                    AccountClient::register(&relay, &email, &password, &name).await
-                } else {
-                    AccountClient::login(&relay, &email, &password).await
-                };
+                let result = AccountClient::login(&relay, &email, &password).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(app) = weak.upgrade() {
                         app.set_connecting(false);

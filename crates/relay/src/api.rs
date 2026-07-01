@@ -1,6 +1,6 @@
 use crate::auth::{
     hash_password, new_connect_token, new_device_id, new_device_token, new_pairing_code,
-    new_session_token, validate_email, validate_password, verify_password,
+    new_session_token, validate_email, validate_password, verify_password, SESSION_DAYS,
 };
 use crate::db::{Db, User};
 use crate::AppState;
@@ -14,7 +14,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const SESSION_DAYS: i64 = 30;
 const CONNECT_TOKEN_SECS: i64 = 300;
 const PAIRING_CODE_SECS: i64 = 600;
 
@@ -23,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/health", get(health))
         .route("/api/v1/auth/register", post(register))
         .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/devices", get(list_devices).post(register_device))
         .route("/api/v1/devices/:id/connect", post(device_connect))
         .route("/api/v1/pairing-codes", post(create_pairing_code))
@@ -41,8 +41,6 @@ struct AuthBody {
     email: String,
     #[serde(default)]
     password: String,
-    #[serde(default)]
-    name: String,
 }
 
 #[derive(Serialize)]
@@ -69,39 +67,22 @@ fn user_resp(u: &User) -> UserResp {
     }
 }
 
-async fn register(State(s): State<AppState>, Json(body): Json<AuthBody>) -> impl IntoResponse {
-    match register_inner(&s, body).await {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => api_error(StatusCode::BAD_REQUEST, &e.to_string()),
-    }
-}
-
-async fn register_inner(s: &AppState, body: AuthBody) -> anyhow::Result<AuthResp> {
-    let email = body.email.trim().to_lowercase();
-    validate_email(&email)?;
-    validate_password(&body.password)?;
-    if s.db.user_by_email(&email)?.is_some() {
-        anyhow::bail!("email already registered");
-    }
-    let user_id = uuid::Uuid::new_v4().to_string();
-    let hash = hash_password(&body.password)?;
-    let name = if body.name.trim().is_empty() {
-        email.split('@').next().unwrap_or("user").to_string()
-    } else {
-        body.name.trim().to_string()
-    };
-    s.db.create_user(&user_id, &email, &hash, &name)?;
-    let session_token = new_session_token();
-    let expires = chrono::Utc::now().timestamp() + SESSION_DAYS * 86400;
-    s.db.create_session(&session_token, &user_id, expires)?;
-    let user = s.db.user_by_id(&user_id)?.unwrap();
-    Ok(AuthResp {
+fn auth_response(s: &AppState, user: &User, session_token: String) -> AuthResp {
+    AuthResp {
         session_token,
-        user: user_resp(&user),
+        user: user_resp(user),
         relay_host: s.public_host.clone(),
         relay_port: s.public_port,
         relay_tls: s.tls,
-    })
+    }
+}
+
+/// Public self-registration is disabled; accounts are created by the relay admin.
+async fn register(_state: State<AppState>, _body: Json<AuthBody>) -> impl IntoResponse {
+    api_error(
+        StatusCode::FORBIDDEN,
+        "registration disabled — contact admin for an account",
+    )
 }
 
 async fn login(State(s): State<AppState>, Json(body): Json<AuthBody>) -> impl IntoResponse {
@@ -122,13 +103,22 @@ async fn login_inner(s: &AppState, body: AuthBody) -> anyhow::Result<AuthResp> {
     let session_token = new_session_token();
     let expires = chrono::Utc::now().timestamp() + SESSION_DAYS * 86400;
     s.db.create_session(&session_token, &user.id, expires)?;
-    Ok(AuthResp {
-        session_token,
-        user: user_resp(&user),
-        relay_host: s.public_host.clone(),
-        relay_port: s.public_port,
-        relay_tls: s.tls,
-    })
+    Ok(auth_response(s, &user, session_token))
+}
+
+async fn logout(State(s): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let token = match headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|a| a.strip_prefix("Bearer "))
+    {
+        Some(t) => t,
+        None => return api_error(StatusCode::UNAUTHORIZED, "missing authorization"),
+    };
+    if let Err(e) = s.db.delete_session(token) {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    Json(json!({ "ok": true })).into_response()
 }
 
 #[derive(Serialize)]
@@ -309,7 +299,7 @@ fn issue_connect_token(
 }
 
 #[allow(clippy::result_large_err)]
-fn bearer_user(s: &AppState, headers: &HeaderMap) -> Result<String, axum::response::Response> {
+pub fn bearer_user(s: &AppState, headers: &HeaderMap) -> Result<String, axum::response::Response> {
     let auth = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -343,11 +333,10 @@ fn device_auth(
     Ok((device_id.to_string(), device_token.to_string()))
 }
 
-fn api_error(status: StatusCode, msg: &str) -> axum::response::Response {
+pub fn api_error(status: StatusCode, msg: &str) -> axum::response::Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
-/// Verify a connect or device token for WS /connect and /uplink.
 pub fn verify_ws_token(db: &Db, device_id: &str, token: &str) -> Result<bool, anyhow::Error> {
     if db.verify_device_token(device_id, token)? {
         return Ok(true);
@@ -358,7 +347,31 @@ pub fn verify_ws_token(db: &Db, device_id: &str, token: &str) -> Result<bool, an
     Ok(false)
 }
 
-/// Verify uplink uses device_token only (not short-lived connect tokens).
 pub fn verify_uplink_token(db: &Db, device_id: &str, token: &str) -> Result<bool, anyhow::Error> {
     db.verify_device_token(device_id, token)
+}
+
+/// Create a user account (admin CLI only).
+pub fn create_user_account(
+    db: &Db,
+    email: &str,
+    password: &str,
+    name: &str,
+) -> anyhow::Result<User> {
+    let email = email.trim().to_lowercase();
+    validate_email(&email)?;
+    validate_password(password)?;
+    if db.user_by_email(&email)?.is_some() {
+        anyhow::bail!("email already exists: {email}");
+    }
+    let user_id = uuid::Uuid::new_v4().to_string();
+    let hash = hash_password(password)?;
+    let name = if name.trim().is_empty() {
+        email.split('@').next().unwrap_or("user").to_string()
+    } else {
+        name.trim().to_string()
+    };
+    db.create_user(&user_id, &email, &hash, &name)?;
+    db.user_by_id(&user_id)?
+        .ok_or_else(|| anyhow::anyhow!("create user failed"))
 }

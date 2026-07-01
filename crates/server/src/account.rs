@@ -283,6 +283,13 @@ pub fn default_relay_url() -> Option<String> {
 }
 
 pub fn clear_config() -> Result<()> {
+    if let Ok(Some(cfg)) = Config::load() {
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(format!("{}/api/v1/auth/logout", cfg.relay_api))
+            .header("Authorization", format!("Bearer {}", cfg.session_token))
+            .send();
+    }
     let path = Config::path();
     if path.exists() {
         std::fs::remove_file(&path).context("remove config")?;
@@ -299,8 +306,8 @@ pub fn print_status(cfg: &Config) {
     println!();
 }
 
-/// First-run interactive setup: email + password only. Relay comes from
-/// `SYNAPSE_RELAY` or a one-time prompt. Tries login first, then register.
+/// First-run interactive setup: email + password. Accounts are created by the
+/// relay admin — this only signs in with credentials you were given.
 pub async fn interactive_setup() -> Result<Config> {
     println!("\n  Welcome to Synapse — first-time setup\n");
     let relay = match default_relay_url() {
@@ -328,17 +335,10 @@ pub async fn interactive_setup() -> Result<Config> {
             cfg.save()?;
             Ok(cfg)
         }
-        Err(login_err) => {
-            tracing::debug!("login failed: {login_err}; trying register");
-            match register_account(&relay, &email, &password, "", &device_name).await {
-                Ok(cfg) => {
-                    cfg.save()?;
-                    Ok(cfg)
-                }
-                Err(reg_err) => {
-                    bail!("sign-in failed ({login_err}). Could not create account either ({reg_err}).");
-                }
-            }
+        Err(e) => {
+            bail!(
+                "sign-in failed ({e}). Ask the relay admin for an account if you don't have one yet."
+            );
         }
     }
 }
