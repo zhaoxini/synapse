@@ -131,9 +131,23 @@ function splitHostPort(authority, tls) {
 
 function showConnectOverlay() {
   $("connectOverlay").classList.remove("hidden");
+  setPairingFieldsEnabled(true);
 }
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");
+  setPairingFieldsEnabled(false);
+}
+
+const PAIRING_FIELD_IDS = ["pairLink", "pairHost", "pairPort", "pairToken"];
+
+function setPairingFieldsEnabled(on) {
+  for (const id of PAIRING_FIELD_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = !on;
+    el.tabIndex = on ? 0 : -1;
+    el.setAttribute("autocomplete", "off");
+  }
 }
 
 function applyCreds(c) {
@@ -2342,6 +2356,7 @@ function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
 initAttachMenu();
+initComposerAntiAutofill();
 initKeyboardInset();
 initPullRefresh();
 initSheetDrag();
@@ -2353,6 +2368,13 @@ $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
 connect();
+
+function initComposerAntiAutofill() {
+  if (!inputEl) return;
+  const unlock = () => { inputEl.readOnly = false; };
+  inputEl.addEventListener("touchstart", unlock, { passive: true });
+  inputEl.addEventListener("focus", unlock);
+}
 
 function initKeyboardInset() {
   const vv = window.visualViewport;

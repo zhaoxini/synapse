@@ -86,7 +86,10 @@
         <button id="attachBtn" class="dock-btn dock-plus" aria-label="More">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
-        <textarea id="input" rows="1" placeholder="Plan, ask, build…"></textarea>
+        <textarea id="input" rows="1" placeholder="Plan, ask, build…"
+          autocomplete="off" autocorrect="on" autocapitalize="sentences" spellcheck="true"
+          enterkeyhint="send" aria-autocomplete="none" data-1p-ignore data-lpignore="true"
+          data-form-type="other" name="synapse-message" readonly></textarea>
         <button id="micBtn" class="dock-btn dock-mic" aria-label="Voice">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="6" y="2" width="4" height="7" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M4 7.5a4 4 0 008 0M8 11.5V14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         </button>
@@ -118,7 +121,7 @@
     <div class="connect-card">
       <h2>Connect to Claude Code</h2>
       <p class="connect-hint">Paste the <code>synapse://</code> link from the terminal where <code>synapse-server</code> is running.</p>
-      <textarea id="pairLink" rows="3" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0"></textarea>
+      <textarea id="pairLink" rows="3" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0" autocomplete="off"></textarea>
       <button id="pairConnect" class="connect-btn">Connect</button>
       <details class="connect-manual">
         <summary>Manual connection</summary>

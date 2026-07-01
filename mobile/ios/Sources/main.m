@@ -40,6 +40,7 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
 }
 
 @interface SynapseScriptHandler : NSObject <WKScriptMessageHandler>
+@property (weak, nonatomic) WKWebView *webView;
 @end
 
 @implementation SynapseScriptHandler
@@ -61,6 +62,8 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
         if ([text isKindOfClass:[NSString class]] && text.length) {
             [UIPasteboard generalPasteboard].string = text;
         }
+    } else if ([op isEqualToString:@"inputFocus"]) {
+        if (self.webView) synapseRemoveInputAccessory(self.webView);
     }
 }
 @end
@@ -88,7 +91,8 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
     [uc addScriptMessageHandler:self.scriptHandler name:@"synapse"];
     NSString *bridgeJs =
         @"window.__synapseHaptic__=function(s){try{webkit.messageHandlers.synapse.postMessage({op:'haptic',style:s||'light'});}catch(e){}};"
-         "window.__synapseCopy__=function(t){try{webkit.messageHandlers.synapse.postMessage({op:'copy',text:String(t||'')});}catch(e){}};";
+         "window.__synapseCopy__=function(t){try{webkit.messageHandlers.synapse.postMessage({op:'copy',text:String(t||'')});}catch(e){}};"
+         "document.addEventListener('focusin',function(e){if(e.target&&e.target.id==='input'){try{webkit.messageHandlers.synapse.postMessage({op:'inputFocus'});}catch(x){}}},true);";
     WKUserScript *script = [[WKUserScript alloc] initWithSource:bridgeJs
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
@@ -96,6 +100,7 @@ static void synapseRemoveInputAccessory(WKWebView *webView) {
     cfg.userContentController = uc;
 
     self.web = [[WKWebView alloc] initWithFrame:self.window.bounds configuration:cfg];
+    self.scriptHandler.webView = self.web;
     self.web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.web.navigationDelegate = self;
     self.web.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
