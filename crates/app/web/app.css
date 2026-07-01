@@ -600,7 +600,7 @@ body:not(.mode-chat) #input {
 
 #modelCtl { cursor: pointer; }
 .model-menu {
-  position: absolute; left: 12px; bottom: calc(100% - 6px); z-index: 45;
+  position: absolute; left: 12px; bottom: calc(100% - 6px); z-index: 50;
   min-width: 200px; max-width: calc(100% - 24px); max-height: 50vh; overflow-y: auto;
   background: var(--elevated); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,.45);
@@ -710,10 +710,16 @@ body:not(.mode-chat) #input {
 .perm-head { font-weight: 600; color: var(--ink); margin-bottom: 8px; }
 .perm .card { margin-bottom: 8px; }
 .perm-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+.perm-b.deny-btn { margin-left: auto; }
+@media (max-width: 420px) {
+  .perm-btns .perm-b { flex: 1 1 calc(50% - 4px); min-width: 0; justify-content: center; }
+  .perm-b.deny-btn { flex: 1 1 100%; margin-left: 0; margin-top: 2px; }
+}
 .perm-b {
   height: 34px; padding: 0 14px; border-radius: var(--radius-sm);
   font-weight: 550; font-size: 13px; border: 1px solid var(--border);
   background: var(--btn-secondary); color: var(--ink); transition: filter .15s, background .15s;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .perm-b:hover { filter: brightness(1.08); }
 .perm-b.allow-btn { background: var(--success); color: #fff; border-color: transparent; }
@@ -737,7 +743,8 @@ body:not(.mode-chat) #input {
   background: rgba(0,0,0,.88);
   display: flex; align-items: center; justify-content: center;
   padding: 20px; padding-top: calc(20px + var(--safe-top));
-  padding-bottom: calc(20px + var(--safe-bottom));
+  padding-bottom: calc(20px + var(--safe-bottom) + var(--kb));
+  overflow-y: auto;
 }
 #connectOverlay.hidden { display: none; }
 .connect-card {
