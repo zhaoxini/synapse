@@ -1,5 +1,18 @@
 # Synapse — agent notes
 
+## Ship loop (mandatory for every UI change)
+
+**Never ask the user to verify or push.** After any change under `crates/app/web/**` (or related server/iOS):
+
+1. **Verify locally** — run `./scripts/verify-web.sh` (Playwright checks + mobile screenshots to `/opt/cursor/artifacts/screenshots/`). On Linux/cloud VM this is the default surface; on macOS also run `./mobile/build-sim.sh` when the embedded bundle matters.
+2. **Fix until green** — if verify fails or screenshots show obvious bugs (stuck loaders, wrong theme, broken layout), fix before shipping.
+3. **Commit + push to `master`** — `git push origin master` (no “you can push now” handoff).
+4. **Deploy happens automatically** — push to `master` triggers:
+   - `.github/workflows/ci.yml` — fmt, tests, `web-ui` Playwright job
+   - `.github/workflows/deploy-web.yml` — GitHub Pages at `https://<owner>.github.io/synapse/`
+
+Do not end a UI task without completing steps 1–3. Pages deploy is async (~1–2 min); mention the preview URL only after push, not as a manual step for the user.
+
 ## After changing the app, rebuild it yourself — don't make the user run the build
 
 The web chat bundle (`crates/app/web/`) is **compiled into the binary** (`include_str!` / `include_bytes!`), and the iOS app is the surface the user actually tests. So **any** change under `crates/app/web/**` or `crates/app/src/**` has *zero* effect until the app is rebuilt + reinstalled — editing the files alone changes nothing on the running app.
@@ -49,11 +62,11 @@ It dials the same running `synapse-server`, so only the static server reloads fr
 
 ### Deploying updates
 
-CI (`.github/workflows/ci.yml`) only fmt/clippy/test/builds — there is no auto-deploy. To ship:
+**Web UI (static bundle):** auto-deployed on every push to `master` that touches `crates/app/web/**` via `.github/workflows/deploy-web.yml` → GitHub Pages. Preview: `https://zhaoxini.github.io/synapse/` (pair with `?host=…&port=…&token=…`). One-time: Repo Settings → Pages → Source: **GitHub Actions**.
 
-- **Server / relay (Rust):** `cargo build --release -p synapse-server` (and `-p synapse-relay`), copy the binary to the host, restart the process. Expose remotely with `--tls` (real or self-signed cert), `--tunnel` (Cloudflare), or a self-hosted `synapse-relay` — all documented in `README.md`.
-- **Web UI change reaching users:** because the bundle is compiled in, a page change ships only by **rebuilding + redeploying** the binary that serves it (`synapse-web`, and/or rebuilding+reinstalling the iOS app via `mobile/build-*.sh` on macOS). Updating `crates/app/web/**` alone never reaches an already-deployed binary.
-- **Desktop/iOS app:** rebuild the relevant artifact (desktop `synapse-app`, or the iOS `.app`/staticlib) and reinstall on the device — there is no auto-update channel.
+**Server / relay (Rust):** not auto-deployed. `cargo build --release -p synapse-server`, copy binary, restart. Optional VPS: set `DEPLOY_*` secrets for SSH rsync in the same workflow.
+
+**iOS / embedded bundle:** `crates/app/web` changes reach the sim app only after `./mobile/build-sim.sh` on macOS (bundle is `include_*` in the binary).
 
 ### What carries over to a new session (and what does NOT)
 

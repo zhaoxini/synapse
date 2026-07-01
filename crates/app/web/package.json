@@ -4,7 +4,8 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "verify": "node verify-ui.mjs"
+    "verify": "node verify-ui.mjs",
+    "screenshot": "node capture-screenshot.mjs"
   },
   "keywords": [],
   "author": "",
