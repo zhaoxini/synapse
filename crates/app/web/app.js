@@ -2149,6 +2149,12 @@ function updateSend() {
   }
 }
 inputEl.addEventListener("input", autoGrow);
+inputEl.addEventListener("focus", () => {
+  setTimeout(() => {
+    try { inputEl.scrollIntoView({ block: "end", behavior: "smooth" }); } catch {}
+    ensurePinned();
+  }, 280);
+});
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault(); doSend();
