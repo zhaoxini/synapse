@@ -5,6 +5,7 @@ mod http;
 mod manager;
 mod models;
 mod relay;
+mod startup;
 mod tail;
 mod tls;
 mod tunnel;
@@ -332,6 +333,8 @@ async fn run_server(args: RunArgs) -> Result<()> {
     } else {
         args.host.clone()
     };
+
+    startup::force_stop_existing_server(args.port)?;
 
     if args.tls {
         let rustls_config = if args.tls_self_signed {

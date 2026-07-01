@@ -133,14 +133,21 @@ pick_install_dir() {
 }
 
 install_bins() {
-  local dest="$1" root="$2" use_sudo=""
+  local dest="$1" root="$2" use_sudo="" wrapper=""
   if [ "${dest}" = "__sudo__/usr/local/bin" ]; then
     dest="/usr/local/bin"
     use_sudo="sudo"
   fi
   mkdir -p "${dest}"
-  ${use_sudo} install -m 755 "${root}/bin/synapse-server" "${dest}/synapse-server"
+  wrapper="$(cd "$(dirname "$0")" && pwd)/synapse-server-wrapper.sh"
+  [ -f "${wrapper}" ] || wrapper=""
+  ${use_sudo} install -m 755 "${root}/bin/synapse-server" "${dest}/synapse-server.real"
   ${use_sudo} install -m 755 "${root}/bin/synapse-relay" "${dest}/synapse-relay"
+  if [ -n "${wrapper}" ]; then
+    ${use_sudo} install -m 755 "${wrapper}" "${dest}/synapse-server"
+  else
+    ${use_sudo} install -m 755 "${root}/bin/synapse-server" "${dest}/synapse-server"
+  fi
   echo "${dest}"
 }
 
