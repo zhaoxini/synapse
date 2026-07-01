@@ -668,7 +668,7 @@ body.mode-native-shell #chatView {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
   transition: border-color .15s, box-shadow .15s;
 }
-/* ---------- Workspaces home (Cursor mobile reference) ---------- */
+/* ---------- Workspaces home (Figma reference) ---------- */
 body.mode-workspaces {
   background: #ffffff;
 }
@@ -681,47 +681,45 @@ body.mode-workspaces #appHeader {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border-bottom: none;
-  padding-top: max(8px, var(--safe-top));
+  padding-top: max(6px, var(--safe-top));
 }
 body.mode-workspaces .ws-toolbar {
-  padding: 2px 16px 0;
-  min-height: 40px;
+  padding: 0 16px;
+  min-height: 36px;
   align-items: center;
 }
 body.mode-workspaces #pageHead {
-  padding: 2px 16px 0;
+  padding: 4px 16px 2px;
   min-height: auto;
 }
 body.mode-workspaces #pageTitle {
-  font-size: 36px;
+  font-size: 34px;
   font-weight: 700;
-  letter-spacing: -0.04em;
-  line-height: 1.05;
-  padding-bottom: 4px;
+  letter-spacing: -0.03em;
+  line-height: 1.06;
 }
 body.mode-workspaces .profile-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   background: transparent;
   box-shadow: none;
   padding: 0;
 }
 body.mode-workspaces .profile-btn img {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: block;
 }
 body.mode-workspaces .iconbtn-glass {
-  width: 34px;
-  height: 34px;
-  background: rgba(120, 120, 128, 0.12);
+  width: 32px;
+  height: 32px;
+  background: #f2f2f7;
   box-shadow: none;
-  color: var(--ink);
+  color: rgba(28, 28, 30, 0.86);
 }
-body.mode-workspaces .ws-toolbar-actions {
-  gap: 8px;
-}
+body.mode-workspaces .ws-toolbar-actions { gap: 8px; }
 body.mode-workspaces #workspaceView {
   flex: 1 1 auto;
   min-height: 0;
@@ -733,33 +731,30 @@ body.mode-workspaces #workspaceList {
   padding: 0;
 }
 body.mode-workspaces .ws-row {
-  padding: 15px 16px;
-  gap: 14px;
-  border-bottom: 0.5px solid rgba(60, 60, 67, 0.12);
+  padding: 14px 16px;
+  gap: 12px;
+  border-bottom: 1px solid rgba(60, 60, 67, 0.1);
 }
 body.mode-workspaces .ws-row:first-child {
-  border-top: 0.5px solid rgba(60, 60, 67, 0.12);
+  border-top: 1px solid rgba(60, 60, 67, 0.1);
 }
 body.mode-workspaces .ws-icon {
-  color: rgba(60, 60, 67, 0.55);
+  color: rgba(60, 60, 67, 0.58);
   flex: 0 0 22px;
 }
 body.mode-workspaces .ws-name {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 400;
   letter-spacing: -0.01em;
 }
 body.mode-workspaces .ws-chev {
-  color: rgba(60, 60, 67, 0.35);
+  color: rgba(60, 60, 67, 0.34);
   margin-left: auto;
 }
-body.mode-workspaces .ws-chev svg {
-  width: 13px;
-  height: 13px;
-}
+body.mode-workspaces .ws-chev svg { width: 13px; height: 13px; }
 body.mode-workspaces #composer {
   background: #ffffff;
-  padding: 10px 16px;
+  padding: 8px 14px;
   padding-bottom: calc(12px + var(--safe-bottom));
   margin-top: auto;
 }
@@ -769,10 +764,10 @@ body.mode-workspaces #composerRow {
   gap: 0;
   background: #f2f2f7;
   border: none;
-  border-radius: 26px;
+  border-radius: 24px;
   box-shadow: none;
-  padding: 6px 8px 6px 6px;
-  min-height: 48px;
+  padding: 5px 8px 5px 5px;
+  min-height: 44px;
 }
 body.mode-workspaces #composerRow:focus-within {
   border: none;
@@ -784,28 +779,24 @@ body.mode-workspaces .composer-field {
   flex: 1;
 }
 body.mode-workspaces #input {
-  font-size: 17px;
-  padding: 10px 4px;
-  line-height: 1.2;
-  min-height: 24px;
+  font-size: 15px;
+  padding: 8px 4px;
+  line-height: 1.25;
+  min-height: 22px;
 }
-body.mode-workspaces #input::placeholder {
-  color: rgba(60, 60, 67, 0.45);
-}
+body.mode-workspaces #input::placeholder { color: rgba(60, 60, 67, 0.5); }
 body.mode-workspaces .dock-btn {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  flex: 0 0 34px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  flex: 0 0 32px;
   background: rgba(120, 120, 128, 0.14);
   color: rgba(60, 60, 67, 0.75);
 }
-body.mode-workspaces #composerControls {
-  display: none;
-}
+body.mode-workspaces #composerControls { display: none; }
+body.mode-workspaces #micBtn { display: inline-flex !important; }
 body.mode-chat #micBtn { display: none; }
 #micBtn { display: none; }
-}
 #composerRow:focus-within {
   border-color: var(--border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
