@@ -1531,6 +1531,7 @@ function workspacePaths() {
 const FOLDER_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 8h6l2 2h8v10H4V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 const FOLDER_ADD_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 8h6l2 2h8v9H4V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 13v4M10 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const SPARK_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l1.6 3.8L17.5 8l-3.9 1.7L12 13.5 10.4 9.7 6.5 8l3.9-1.7L12 2.5z" fill="currentColor"/><circle cx="5.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="18.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="12" cy="21" r="1.5" fill="currentColor" opacity=".75"/></svg>`;
+const ARCHIVE_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12v10a1 1 0 01-1 1H5a1 1 0 01-1-1V6z" stroke="currentColor" stroke-width="1.4"/><path d="M3 6h14M8 6V4h4v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 10h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`;
 
 function formatNum(n) {
   return (n || 0).toLocaleString("en-US");
@@ -1618,7 +1619,8 @@ function sessionSubtitle(s) {
   const time = t ? relTime(t) : "";
   if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
   if (diff) return { text: "", cls: "", html: diff };
-  return t ? { text: time, cls: "", html: "" } : { text: "", cls: "", html: "" };
+  if (!diff) return { text: "No Changes", cls: "muted", html: "" };
+  return { text: "", cls: "", html: "" };
 }
 
 let navFromPop = false;
@@ -1670,41 +1672,10 @@ function updateChrome() {
   }
 }
 
-function bindSwipeRow(wrap, s) {
-  const row = wrap.querySelector(".sess-row");
-  let startX = 0, dx = 0, dragging = false;
-  row.addEventListener("touchstart", (e) => {
-    startX = e.touches[0].clientX;
-    dragging = true;
-    document.querySelectorAll(".sess-swipe-wrap.open").forEach(w => {
-      if (w !== wrap) w.classList.remove("open");
-    });
-  }, { passive: true });
-  row.addEventListener("touchmove", (e) => {
-    if (!dragging) return;
-    dx = e.touches[0].clientX - startX;
-    if (dx < 0 && dx > -140) row.style.transform = `translateX(${dx}px)`;
-  }, { passive: true });
-  const end = () => {
-    if (!dragging) return;
-    dragging = false;
-    row.style.transform = "";
-    if (dx < -56) { wrap.classList.add("open"); haptic("light"); }
-    else wrap.classList.remove("open");
-    dx = 0;
-  };
-  row.addEventListener("touchend", end);
-  row.addEventListener("touchcancel", end);
-  wrap.querySelector(".act-pin").addEventListener("click", (e) => {
-    e.stopPropagation();
-    send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
-    wrap.classList.remove("open");
-    haptic("medium");
-  });
-  wrap.querySelector(".act-archive").addEventListener("click", (e) => {
+function bindArchiveBtn(btn, s) {
+  btn.addEventListener("click", (e) => {
     e.stopPropagation();
     send({ op: "archive", sessionId: s.id });
-    wrap.classList.remove("open");
     haptic("medium");
   });
 }
@@ -1778,12 +1749,7 @@ function renderSessions() {
     list.appendChild(head);
     for (const s of items) {
       const wrap = document.createElement("div");
-      wrap.className = "sess-swipe-wrap";
-      wrap.innerHTML =
-        `<div class="sess-actions">` +
-          `<button type="button" class="act-pin">${s.pinned ? "Unpin" : "Pin"}</button>` +
-          `<button type="button" class="act-archive">Archive</button>` +
-        `</div>`;
+      wrap.className = "sess-row-wrap";
       const row = document.createElement("div");
       row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
       const sub = sessionSubtitle(s);
@@ -1796,11 +1762,15 @@ function renderSessions() {
         `<div class="sess-body">` +
           `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
           subHtml +
-        `</div>`;
+        `</div>` +
+        `<button type="button" class="sess-archive-btn" aria-label="Archive">${ARCHIVE_SVG}</button>`;
       wrap.appendChild(row);
       list.appendChild(wrap);
-      row.addEventListener("click", () => select(s.id));
-      bindSwipeRow(wrap, s);
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".sess-archive-btn")) return;
+        select(s.id);
+      });
+      bindArchiveBtn(row.querySelector(".sess-archive-btn"), s);
       bindLongPress(row, s);
     }
   }
