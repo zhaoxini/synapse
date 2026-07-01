@@ -161,6 +161,7 @@ jobs:
             echo "RELAY_SSH / RELAY_SSH_KEY not configured — skip mirror sync"
             exit 0
           fi
+          mkdir -p ~/.ssh
           printf '%s\n' "$RELAY_SSH_KEY" > ~/.ssh/relay_key
           chmod 600 ~/.ssh/relay_key
           host="${RELAY_SSH#*@}"
