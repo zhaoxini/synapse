@@ -283,8 +283,8 @@ body.mode-chat #sessionView { display: none; }
 .sess-sub.muted { color: var(--ink-2); }
 .sess-sub .fail-mark { color: var(--danger); margin-right: 2px; }
 .sess-diff { color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.sess-diff.add { color: var(--ink-2); }
-.sess-diff.del { color: var(--ink-2); }
+.sess-diff.add { color: var(--success); }
+.sess-diff.del { color: var(--danger); }
 .sess-row.creating { opacity: .55; pointer-events: none; }
 .empty-hint {
   padding: 48px 24px; text-align: center; color: var(--ink-3); font-size: 14px;

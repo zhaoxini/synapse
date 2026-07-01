@@ -132,6 +132,13 @@ function splitHostPort(authority, tls) {
 function showConnectOverlay() {
   $("connectOverlay").classList.remove("hidden");
   setPairingFieldsEnabled(true);
+  const c = creds();
+  if (c) {
+    if ($("pairHost") && !$("pairHost").value) $("pairHost").value = c.host || "";
+    if ($("pairPort") && !$("pairPort").value) $("pairPort").value = c.port || "";
+    if ($("pairToken") && !$("pairToken").value) $("pairToken").value = c.token || "";
+    if ($("pairTls")) $("pairTls").checked = !!c.tls;
+  }
 }
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");
@@ -1363,9 +1370,14 @@ function openAttachMenu() {
     confirmActionSheet("Disconnect and return to pairing?", () => {
       if (state.ws) { state.ws.close(); state.ws = null; }
       state.connected = false;
+      state.activeId = "";
+      state.view = "workspaces";
+      document.body.className = "mode-workspaces theme-light";
+      clearMessages();
       clearCreds();
       window.__SYNAPSE__ = null;
       showConnectOverlay();
+      updateChrome();
     });
   });
   menu.classList.add("show");
@@ -2213,8 +2225,10 @@ sendBtn.addEventListener("click", () => {
   doSend();
 });
 function doSend() {
+  if (sendBtn.disabled && !state.busy) return;
   const text = inputEl.value.trim();
   if (!text) return;
+  sendBtn.disabled = true;
   inputEl.value = ""; autoGrow();
   haptic("light");
   if (state.view !== "chat") {
@@ -2224,12 +2238,14 @@ function doSend() {
     state.pendingSend = text;
     if (state.view !== "chat") showChat(false);
     newSession();
+    updateSend();
     return;
   }
   // No optimistic echo: the server broadcasts the user message to every device
   // viewing this session and we render it from that broadcast (handleEvent
   // "user"), so all devices show an identical transcript.
   send({ op: "send", sessionId: state.activeId, content: text });
+  updateSend();
 }
 
 // =================== navigation ===================
@@ -2525,6 +2541,25 @@ $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
+$("pairLink").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+    e.preventDefault();
+    pairFromForm();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if ($("bottomSheet").classList.contains("show")) { closeSheet(); return; }
+  if (state.searchOpen) {
+    state.searchOpen = false;
+    state.searchQuery = "";
+    updateChrome();
+    searchInput.blur();
+    return;
+  }
+  closeMenus();
+  closeRowMenu();
+});
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds };
 connect();
 
