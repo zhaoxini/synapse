@@ -147,7 +147,7 @@ jobs:
     name: sync China install mirror
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ secrets.RELAY_SSH_KEY != '' }}
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -157,7 +157,10 @@ jobs:
           RELAY_SSH_KEY: ${{ secrets.RELAY_SSH_KEY }}
           TAG: ${{ github.ref_name }}
         run: |
-          mkdir -p ~/.ssh
+          if [ -z "${RELAY_SSH_KEY:-}" ] || [ -z "${RELAY_SSH:-}" ]; then
+            echo "RELAY_SSH / RELAY_SSH_KEY not configured — skip mirror sync"
+            exit 0
+          fi
           printf '%s\n' "$RELAY_SSH_KEY" > ~/.ssh/relay_key
           chmod 600 ~/.ssh/relay_key
           host="${RELAY_SSH#*@}"
