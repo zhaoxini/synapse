@@ -39,6 +39,70 @@ circular avatar, pill-shaped floating composer, minimal top bar).
 - The `claude` CLI on `PATH` (or pass `--bin`). Synapse resolves it via the
   same lookup the CLI ships, e.g. `/Users/<you>/.hermes/node/bin/claude`.
 
+## Install
+
+Pre-built `synapse-server` and `synapse-relay` binaries are published on
+[GitHub Releases](https://github.com/zhaoxini/synapse/releases). Use the
+install script — no Rust toolchain required:
+
+```sh
+# China-friendly mirror (recommended when GitHub is slow or unreachable)
+curl -fsSL https://zx0623.duckdns.org/install.sh | bash
+
+# Direct from GitHub Releases
+curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
+```
+
+The script installs into `/usr/local/bin` (or `~/.local/bin` if needed). Pin a
+version or skip the mirror:
+
+```sh
+SYNAPSE_VERSION=v0.2.3 curl -fsSL https://zx0623.duckdns.org/install.sh | bash
+SYNAPSE_MIRROR= curl -fsSL https://zx0623.duckdns.org/install.sh | bash   # force GitHub
+```
+
+Verify: `synapse-server --version` and `which synapse-server`.
+
+### Run the server
+
+After install, **do not** run a bare foreground process. The wrapper starts the
+server in the background and prints listen port + pairing code:
+
+```sh
+synapse-server              # start (background)
+synapse-server stop
+synapse-server pairing-code # 6-digit code for app / web
+synapse-server status       # account + device info
+```
+
+Logs: `~/.synapse/server.log`. Auto-start on install:
+`SYNAPSE_AUTO_START=1 curl -fsSL https://zx0623.duckdns.org/install.sh | bash`
+
+### Local dev server (from source — repo contributors only)
+
+When hacking on this repo, use the background helper — port **4173**, code
+**071111** (matches `http://127.0.0.1:8000/?code=071111`).
+
+```sh
+./mobile/dev-server.sh          # background start, prints OK + listen port
+./mobile/dev-server.sh status
+./mobile/dev-server.sh stop     # kill our server, or stop foreground synapse-server first
+```
+
+Logs: `~/.synapse/dev-server.log`. Web UI (with a static server on port 8000):
+
+```
+http://127.0.0.1:8000/?code=071111
+```
+
+Host (`127.0.0.1`) and server port (`4173`) are defaults — add `host` / `port`
+query params only when connecting to a non-local backend.
+
+> **Note:** the release installer (`install.sh`) and `./mobile/dev-server.sh`
+> are different paths. The installer puts the published release binary on your
+> PATH (account/relay pairing). `dev-server.sh` runs the workspace debug build
+> for local web/simulator work.
+
 ## Build
 
 ```sh
