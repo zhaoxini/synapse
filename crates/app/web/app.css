@@ -386,6 +386,7 @@ body.mode-chat #sessionView { display: none; }
 .card-head .nm { font-weight: 450; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .card-head .nm .sub { color: var(--ink-3); font-family: var(--font-mono); font-size: 12px; margin-left: 6px; }
 .card-head .st { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: 0 0 6px; }
+.card-head .st.done { background: var(--success); opacity: 0.55; }
 .card-head .st.running { background: var(--warning); }
 .card-head .st.error { background: var(--danger); }
 .card-head .chev { color: var(--ink-3); font-size: 10px; transition: transform .2s; }
@@ -543,8 +544,8 @@ body.mode-chat #sessionView { display: none; }
 }
 body:not(.mode-chat) #composerRow { flex-wrap: nowrap; }
 body:not(.mode-chat) #composerControls { display: none !important; }
-body:not(.mode-chat) #micBtn { display: flex !important; }
-body.mode-chat #micBtn { display: none !important; }
+/* Voice input not shipped — hide mic to avoid dead-end taps */
+#micBtn { display: none !important; }
 body.mode-chat #composerRow {
   flex-direction: column; align-items: stretch; gap: 10px;
   padding: 14px 14px 10px; border-radius: 22px;
@@ -615,10 +616,12 @@ body:not(.mode-chat) #input {
 
 /* ---------- new pill ---------- */
 #newPill {
-  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 20;
   background: var(--elevated); color: var(--ink); font-size: 12px; font-weight: 500;
   padding: 6px 14px; border-radius: 14px; border: 1px solid var(--border);
   box-shadow: 0 6px 20px rgba(0,0,0,.35); display: none; align-items: center; gap: 5px;
+  pointer-events: auto;
 }
 #newPill.show { display: inline-flex; }
 
@@ -677,7 +680,13 @@ body:not(.mode-chat) #input {
 /* ask-user-question (read-only render; Phase 2 makes options actionable) */
 .ask { display: flex; flex-direction: column; gap: 6px; font-family: var(--font-ui); }
 .ask-q { font-weight: 550; color: var(--ink); }
-.ask-o { border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 7px 10px; }
+.ask-o {
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm); padding: 7px 10px;
+  background: var(--btn-secondary); pointer-events: none; cursor: default;
+}
+.ask .ask-hint {
+  margin: 0 0 6px; font-size: 11px; color: var(--ink-3); font-style: italic;
+}
 .ask-lbl { font-weight: 500; color: var(--ink); display: block; }
 .ask-desc { color: var(--ink-3); font-size: 12px; }
 
@@ -857,4 +866,9 @@ body:not(.mode-chat) #input {
 
 /* context action sheet (long-press) */
 .ctx-sheet .row-mi { padding: 14px 16px; font-size: 15px; text-align: center; }
-.ctx-sheet .row-menu { min-width: 220px; left: 50% !important; transform: translateX(-50%); bottom: calc(16px + var(--safe-bottom)); top: auto !important; }
+.ctx-sheet .row-menu { min-width: 220px; left: 50% !important; transform: translateX(-50%); bottom: calc(16px + var(--safe-bottom) + var(--kb)); top: auto !important; z-index: 55; }
+.msg.user .bubble, .msg.assistant .body { -webkit-touch-callout: none; }
+.sheet-rename {
+  display: flex; flex-direction: column; gap: 12px; padding: 4px 0 8px;
+}
+.sheet-rename .connect-btn { width: 100%; }

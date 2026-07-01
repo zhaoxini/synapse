@@ -479,7 +479,7 @@ function flushStreamToTurn() {
   tn.order = order;
   tn.tools = tools;
   ensureTurnInDom();
-  renderTurn(false);
+  scheduleRenderTurn(false);
   updatePulse();
   ensurePinned();
 }
@@ -592,7 +592,7 @@ function ingestAssistant(evt) {
   if (streaming) state.stream.reset();
 
   const hasContent = tn.order.length > 0;
-  if (hasContent) { ensureTurnInDom(); renderTurn(false); }
+  if (hasContent) { ensureTurnInDom(); scheduleRenderTurn(false); }
   updatePulse();
   ensurePinned();
 }
@@ -643,7 +643,26 @@ function renderTurn(settled) {
   }
 
   tn.replyWrap.innerHTML = "";
-  if (replyText) tn.replyWrap.appendChild(mdEl(replyText));
+  if (replyText) {
+    const md = mdEl(replyText);
+    bindMessageActions(md, replyText);
+    tn.replyWrap.appendChild(md);
+  }
+}
+
+// Coalesce streaming re-renders to one paint per frame.
+let renderTurnRAF = 0;
+function scheduleRenderTurn(settled) {
+  if (settled) {
+    if (renderTurnRAF) { cancelAnimationFrame(renderTurnRAF); renderTurnRAF = 0; }
+    renderTurn(true);
+    return;
+  }
+  if (renderTurnRAF) return;
+  renderTurnRAF = requestAnimationFrame(() => {
+    renderTurnRAF = 0;
+    renderTurn(false);
+  });
 }
 
 function scrollActivityFeed(feed, scroll) {
@@ -1011,7 +1030,7 @@ function toolCard(t) {
   head.innerHTML =
     `<span class="ic">${meta.glyph}</span>` +
     `<span class="nm">${escapeHtml(meta.title)}${meta.sub ? `<span class="sub">${escapeHtml(meta.sub)}</span>` : ""}</span>` +
-    `<span class="st ${t.status}"></span>` +
+    `<span class="st ${t.status === "running" ? "running" : t.status === "error" ? "error" : "done"}"></span>` +
     `<span class="chev">▸</span>`;
   const body = document.createElement("div");
   body.className = "card-body";
@@ -1187,6 +1206,9 @@ function todoEl(todos) {
 function askText(a) { const q = (Array.isArray(a.questions) && a.questions[0]) || a; return str(q && q.question); }
 function askEl(a) {
   const wrap = document.createElement("div"); wrap.className = "ask";
+  const hint = document.createElement("p"); hint.className = "ask-hint";
+  hint.textContent = "Read-only — answer from the desktop session.";
+  wrap.appendChild(hint);
   const qs = Array.isArray(a.questions) ? a.questions : (a.question ? [a] : []);
   for (const q of qs) {
     const qe = document.createElement("div"); qe.className = "ask-q"; qe.textContent = str(q.question); wrap.appendChild(qe);
@@ -1286,7 +1308,7 @@ const PERM_MODES = [
   { id: "default", label: "Ask" },
   { id: "acceptEdits", label: "Auto-edit" },
   { id: "plan", label: "Plan" },
-  { id: "bypassPermissions", label: "Yolo" },
+  { id: "bypassPermissions", label: "Bypass" },
 ];
 function permLabelFor(mode) { const m = PERM_MODES.find(x => x.id === mode); return m ? m.label : (mode || "Ask"); }
 function currentMode() {
@@ -1353,7 +1375,7 @@ function ingestResult(evt) {
                : Array.isArray(c.content) ? c.content.map(x => x.text || "").join("\n") : "";
     }
   }
-  renderTurn(false);
+  scheduleRenderTurn(false);
   updatePulse();
   ensurePinned();
 }
@@ -1570,6 +1592,7 @@ function echoUser(text, mid) {
   bubble.className = "bubble";
   bubble.textContent = text;
   el.appendChild(bubble);
+  bindMessageActions(bubble, text);
   state.blocks.push({ el, role: "user", mid });
   messagesEl.appendChild(el);
   emptyEl.classList.add("hidden");
@@ -1657,14 +1680,14 @@ function updatePulse() {
   const show = state.busy && (toolRunning || !hasReply);
   if (show && tn) {
     ensureTurnInDom();
-    renderTurn(false);
+    scheduleRenderTurn(false);
     ensurePinned();
   }
   if (state.busy && !tickTimer) {
     tickTimer = setInterval(() => {
       if (state.turn) {
         state.turn.ticks++;
-        renderTurn(false);
+        scheduleRenderTurn(false);
         if (state.turn.activityFeed) {
           const scroll = state.turn.activityFeed.querySelector(".activity-scroll");
           if (scroll) scrollActivityFeed(state.turn.activityFeed, scroll);
@@ -1731,6 +1754,50 @@ function cleanTitle(raw) {
 }
 // Per-row actions (⋯): rename / delete. A tiny popup anchored to the button.
 function closeRowMenu() { const m = $("rowMenu"); if (m) m.remove(); }
+
+function openRenameSheet(s) {
+  const wrap = document.createElement("div");
+  wrap.className = "sheet-rename";
+  const inp = document.createElement("input");
+  inp.className = "path-input";
+  inp.type = "text";
+  inp.value = cleanTitle(s.name) || "";
+  inp.setAttribute("enterkeyhint", "done");
+  const save = document.createElement("button");
+  save.className = "connect-btn";
+  save.textContent = "Save";
+  save.addEventListener("click", () => {
+    const n = inp.value.trim();
+    if (n) send({ op: "rename", sessionId: s.id, name: n });
+    closeSheet();
+    haptic("light");
+  });
+  wrap.appendChild(inp);
+  wrap.appendChild(save);
+  openSheet("Rename session", wrap);
+  setTimeout(() => { inp.focus(); inp.select(); }, 80);
+}
+
+function confirmDeleteSheet(s, onDone) {
+  closeRowMenu();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const add = (label, cls, fn) => {
+    const el = document.createElement("div");
+    el.className = "row-mi" + (cls ? " " + cls : "");
+    el.textContent = label;
+    el.addEventListener("click", () => { closeRowMenu(); fn(); });
+    m.appendChild(el);
+  };
+  add("Cancel", "", () => {});
+  add("Delete session", "danger", () => {
+    send({ op: "delete", sessionId: s.id });
+    if (onDone) onDone();
+    haptic("medium");
+  });
+  document.body.appendChild(m);
+}
+
 function rowMenu(s, anchor) {
   closeRowMenu();
   const m = document.createElement("div"); m.className = "row-menu"; m.id = "rowMenu";
@@ -1741,10 +1808,7 @@ function rowMenu(s, anchor) {
     el.addEventListener("click", (e) => { e.stopPropagation(); closeRowMenu(); fn(); });
     m.appendChild(el);
   };
-  add("Rename", "", () => {
-    const n = prompt("Rename session", cleanTitle(s.name) || "");
-    if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
-  });
+  add("Rename", "", () => openRenameSheet(s));
   add("Copy path", "", () => { copyText(s.cwd || ""); toast("Path copied"); haptic("light"); });
   add(s.pinned ? "Unpin" : "Pin", "", () => {
     send({ op: "pin", sessionId: s.id, pinned: !s.pinned });
@@ -1755,9 +1819,7 @@ function rowMenu(s, anchor) {
     else send({ op: "archive", sessionId: s.id });
     haptic("medium");
   });
-  add("Delete", "danger", () => {
-    if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
-  });
+  add("Delete", "danger", () => confirmDeleteSheet(s));
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 4}px`;
@@ -1775,19 +1837,14 @@ function showRowContext(s) {
     el.addEventListener("click", () => { closeRowMenu(); fn(); });
     m.appendChild(el);
   };
-  add("Rename", () => {
-    const n = prompt("Rename session", cleanTitle(s.name) || "");
-    if (n && n.trim()) send({ op: "rename", sessionId: s.id, name: n.trim() });
-  });
+  add("Rename", () => openRenameSheet(s));
   add("Copy path", () => { copyText(s.cwd || ""); toast("Path copied"); });
   add(s.pinned ? "Unpin" : "Pin", () => send({ op: "pin", sessionId: s.id, pinned: !s.pinned }));
   add(s.archived ? "Unarchive" : "Archive", () => {
     if (s.archived) send({ op: "unarchive", sessionId: s.id });
     else send({ op: "archive", sessionId: s.id });
   });
-  add("Delete", () => {
-    if (confirm("Remove this session from the list?")) send({ op: "delete", sessionId: s.id });
-  });
+  add("Delete", () => confirmDeleteSheet(s));
   document.body.appendChild(m);
 }
 document.addEventListener("click", closeRowMenu);
@@ -2163,7 +2220,7 @@ $("menuBtn").addEventListener("click", () => {
     toast("Refreshed");
   }
 });
-$("micBtn").addEventListener("click", () => toast("Voice input not available"));
+$("micBtn")?.addEventListener("click", () => {});
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
   renderSessions();
@@ -2335,7 +2392,39 @@ function toast(msg) {
 }
 $("toastClose").addEventListener("click", () => $("toast").classList.remove("show"));
 
-// =================== clipboard ===================
+// =================== clipboard & message actions ===================
+function bindMessageActions(node, text) {
+  if (!node || !text) return;
+  let timer = null;
+  const show = () => showMessageContext(text);
+  const start = () => {
+    timer = setTimeout(() => { timer = null; haptic("medium"); show(); }, 480);
+  };
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  node.addEventListener("touchstart", start, { passive: true });
+  node.addEventListener("touchend", cancel);
+  node.addEventListener("touchmove", cancel);
+  node.addEventListener("touchcancel", cancel);
+  node.addEventListener("contextmenu", (e) => { e.preventDefault(); show(); });
+}
+
+function showMessageContext(text) {
+  closeRowMenu();
+  const m = document.createElement("div");
+  m.className = "row-menu ctx-sheet"; m.id = "rowMenu";
+  const copy = document.createElement("div");
+  copy.className = "row-mi";
+  copy.textContent = "Copy message";
+  copy.addEventListener("click", () => {
+    copyText(text);
+    toast("Copied");
+    haptic("light");
+    closeRowMenu();
+  });
+  m.appendChild(copy);
+  document.body.appendChild(m);
+}
+
 // Native bridge: if window.__synapseCopy__ exists (Rust), use it; else fallback.
 function copyText(text) {
   if (window.__synapseCopy__) { window.__synapseCopy__(text); return; }
