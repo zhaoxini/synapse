@@ -23,6 +23,10 @@ const chatTitle = $("chatTitle");
 const searchWrap = $("searchWrap");
 const searchInput = $("searchInput");
 
+const URL_PARAMS = new URLSearchParams(location.search);
+/** iOS SwiftUI shell: native owns workspaces/nav; webview is chat-only. */
+const NATIVE_SHELL = URL_PARAMS.get("shell") === "native";
+
 const state = {
   ws: null,
   url: "",
@@ -150,6 +154,15 @@ function setPairingFieldsEnabled(on) {
   }
 }
 
+function notifyNative(op, data) {
+  if (!NATIVE_SHELL) return;
+  try {
+    if (typeof webkit !== "undefined" && webkit.messageHandlers && webkit.messageHandlers.synapse) {
+      webkit.messageHandlers.synapse.postMessage(Object.assign({ op }, data || {}));
+    }
+  } catch {}
+}
+
 function applyCreds(c) {
   window.__SYNAPSE__ = c;
   persistCreds(c);
@@ -204,12 +217,16 @@ function doConnect(first) {
     if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
     hideConnectOverlay();
     $("reconnect").classList.remove("show");
-    showWorkspaces();
-    // prime session list
-    send({ op: "list" });
-    if (first) {
-      // pick first session after list arrives; nothing else here
-    } else if (state.activeId) {
+    if (NATIVE_SHELL) {
+      send({ op: "list" });
+      const sid = URL_PARAMS.get("sessionId");
+      if (sid) select(sid);
+      notifyNative("chatReady");
+    } else {
+      showWorkspaces();
+      send({ op: "list" });
+    }
+    if (!NATIVE_SHELL && !first && state.activeId) {
       send({ op: "history", sessionId: state.activeId, limit: 400 });
     }
   };
@@ -2161,15 +2178,27 @@ function select(id) {
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
-  closeSessionDrawer();
+  if (!NATIVE_SHELL) closeSessionDrawer();
   clearMessages();
   state.turn = null;
   state.loadingHistory = true;
   beginHistoryLoad();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
-  showChat();
+  if (!NATIVE_SHELL) {
+    showChat();
+  } else {
+    state.view = "chat";
+    document.body.classList.add("mode-chat");
+    updateChrome();
+    notifyNative("sessionOpened", { sessionId: id, title: s ? cleanTitle(s.name) : "" });
+  }
   haptic("light");
+}
+
+function openSession(id) {
+  if (!id) return;
+  select(id);
 }
 function autoGrow() {
   inputEl.style.height = "auto";
@@ -2435,6 +2464,9 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
+if (NATIVE_SHELL) {
+  document.body.classList.add("mode-native-shell", "mode-chat");
+}
 initAttachMenu();
 initComposerAntiAutofill();
 initKeyboardInset();
@@ -2446,8 +2478,9 @@ $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairConnect").addEventListener("click", pairFromForm);
 $("pairManualConnect").addEventListener("click", pairFromForm);
-window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft };
-connect();
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
+if (!NATIVE_SHELL) connect();
+else if (creds()) connect();
 
 function initComposerAntiAutofill() {
   if (!inputEl) return;
@@ -2469,6 +2502,7 @@ function initKeyboardInset() {
 }
 
 function initPullRefresh() {
+  if (NATIVE_SHELL) return;
   const list = $("workspaceList");
   const indicator = $("pullRefresh");
   let startY = 0, pulling = false;

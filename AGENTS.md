@@ -26,6 +26,8 @@ Server-only changes (`crates/server/**`) don't need an app rebuild — rebuild +
 
 Always verify on the real surface (the sim app), not just a browser tab.
 
+**iOS hybrid (SwiftUI shell + web chat):** `mobile/ios/Sources/*.swift` — native workspaces/nav; web loads with `?shell=native`. Browser/Pages still use the full web bundle.
+
 ## Web UI design system
 
 Before changing layout, spacing, or components under `crates/app/web/`, read **`crates/app/web/DESIGN.md`** — tokens, component structure (topbar, tree, composer, sheets), iOS touch-target rules, and Konsta/HIG references.
