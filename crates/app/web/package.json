@@ -1,17 +1,30 @@
 {
-  "name": "web",
-  "version": "1.0.0",
-  "description": "",
-  "main": "app.js",
+  "name": "synapse-web",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "verify": "node verify-ui.mjs",
     "screenshot": "node capture-screenshot.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "dependencies": {
+    "@ionic/react": "^8.8.12",
+    "highlight.js": "^11.11.1",
+    "ionicons": "^8.0.13",
+    "marked": "^18.0.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
   "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
     "playwright": "^1.61.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0",
     "ws": "^8.21.0"
   }
 }

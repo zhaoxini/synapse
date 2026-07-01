@@ -57,14 +57,21 @@ The web UI runs on the VM's localhost, so a phone can't hit it directly. Expose 
 
 ### Live-editing the web UI (instant, no Rust rebuild) vs. shipping it
 
-The web bundle is `include_*`-baked into the `synapse-web` / `synapse-app` binaries, so `synapse-web` (`:8765`) and the iOS WKWebView always serve the **compiled-in** copy — editing `crates/app/web/**` does nothing there until you rebuild (see the top of this file). For a fast dev loop, serve the source directory from disk with any static server and point a browser at it — edits show on **plain browser refresh**, no rebuild:
+The web bundle is `include_*`-baked into the `synapse-web` / `synapse-app` binaries from **`crates/app/web/dist/`** (Ionic + Vite build output). Editing `src/**` or `public/synapse-core.js` does nothing in the embedded binary until you run:
 
 ```sh
-python3 -m http.server 8770 --directory crates/app/web   # or any static server
+cd crates/app/web && npm run build   # writes dist/
+cargo build -p synapse-app           # re-embeds dist/
+```
+
+For a fast dev loop with **hot reload**, use the Vite dev server — edits to React shell or CSS refresh instantly; edits to `public/synapse-core.js` need a full page reload:
+
+```sh
+cd crates/app/web && npm run dev     # http://127.0.0.1:8770
 # open: http://127.0.0.1:8770/?host=127.0.0.1&port=4173&token=CODE  (or via a tunnel for phone)
 ```
 
-It dials the same running `synapse-server`, so only the static server reloads from disk; the server keeps running. This is dev-only — once the UI looks right, **rebuild to bake it in** (and reinstall the iOS app) or the change won't ship. There is no in-app/over-the-air hot-reload of the bundle in production.
+It dials the same running `synapse-server`. This is dev-only — once the UI looks right, **`npm run build`** then rebuild Rust (and reinstall the iOS app) or the change won't ship.
 
 ### Deploying updates
 

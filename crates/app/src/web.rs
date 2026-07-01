@@ -1,33 +1,25 @@
 //! Offline-embedded web chat bundle + a tiny localhost host.
 //!
-//! The entire post-pairing experience (chat, composer, drawer, sessions) runs
-//! in a webview against this bundle. Files are baked into the binary at compile
-//! time so there is zero network dependency and instant load. A native host
-//! (iOS WKWebView, or a desktop browser) loads the served `index.html`; the web
-//! app is a normal WS client that dials the Synapse server itself.
-//!
-//! Asset names are the path relative to `web/` (e.g. `vendor/marked.min.js`,
-//! `app.css`). Unknown names return `None`.
-//!
-//! ponytail: hand-written mini HTTP server on std::net. ~90 lines, zero new
-//! deps; a static-file server for 6 known paths, not a real web server.
-//! Upgrade to axum/hyper if auth, POST, or streaming ever lands here.
+//! The Ionic/React bundle is built to `web/dist/` (`npm run build` in
+//! `crates/app/web/`). Files are baked into the binary at compile time.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-/// `web/index.html`
-pub const INDEX_HTML: &str = include_str!("../web/index.html");
+/// `web/dist/index.html`
+pub const INDEX_HTML: &str = include_str!("../web/dist/index.html");
 
-/// Bundled assets keyed by path relative to `web/`. `None` for unknown paths.
+/// Bundled assets keyed by path relative to `web/dist/`. `None` for unknown paths.
 pub fn asset(path: &str) -> Option<&'static [u8]> {
     Some(match path {
-        "app.css" => include_bytes!("../web/app.css"),
-        "app.js" => include_bytes!("../web/app.js"),
-        "vendor/marked.min.js" => include_bytes!("../web/vendor/marked.min.js"),
-        "vendor/highlight.min.js" => include_bytes!("../web/vendor/highlight.min.js"),
-        "vendor/github-dark.min.css" => include_bytes!("../web/vendor/github-dark.min.css"),
-        "vendor/github.min.css" => include_bytes!("../web/vendor/github.min.css"),
+        "assets/app.js" => include_bytes!("../web/dist/assets/app.js"),
+        "assets/app.css" => include_bytes!("../web/dist/assets/app.css"),
+        "synapse-core.js" => include_bytes!("../web/dist/synapse-core.js"),
+        "logo.svg" => include_bytes!("../web/dist/logo.svg"),
+        "vendor/marked.min.js" => include_bytes!("../web/dist/vendor/marked.min.js"),
+        "vendor/highlight.min.js" => include_bytes!("../web/dist/vendor/highlight.min.js"),
+        "vendor/github-dark.min.css" => include_bytes!("../web/dist/vendor/github-dark.min.css"),
+        "vendor/github.min.css" => include_bytes!("../web/dist/vendor/github.min.css"),
         _ => return None,
     })
 }
@@ -38,20 +30,19 @@ pub fn mime(path: &str) -> &'static str {
         "html" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" => "application/javascript; charset=utf-8",
+        "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     }
 }
 
 /// Bind a listener on `127.0.0.1:port` (port 0 = OS-assigned ephemeral).
-/// Returns the listener and the actual bound port.
 pub fn bind(port: u16) -> std::io::Result<(TcpListener, u16)> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let actual = listener.local_addr()?.port();
     Ok((listener, actual))
 }
 
-/// Serve the bundle on `listener` forever (blocking). Each connection is
-/// handled on its own thread. Used by the `synapse-web` bin.
+/// Serve the bundle on `listener` forever (blocking).
 pub fn serve(listener: TcpListener) {
     for stream in listener.incoming() {
         let Ok(mut s) = stream else { continue };
@@ -60,7 +51,6 @@ pub fn serve(listener: TcpListener) {
 }
 
 /// Start the host on a background thread bound to an ephemeral localhost port.
-/// Returns the chosen port. Used by the iOS WKWebView host.
 pub fn spawn_host() -> std::io::Result<u16> {
     let (listener, port) = bind(0)?;
     std::thread::Builder::new()

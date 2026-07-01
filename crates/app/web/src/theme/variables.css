@@ -1,0 +1,18 @@
+/** Ionic iOS light theme overrides for Synapse */
+:root {
+  --ion-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --ion-background-color: #ffffff;
+  --ion-text-color: #1c1c1e;
+  --ion-color-primary: #007aff;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-toolbar-background: rgba(255, 255, 255, 0.72);
+  --ion-toolbar-color: #1c1c1e;
+}
+
+html.theme-light {
+  color-scheme: light;
+}
+
+ion-app {
+  background: var(--ion-background-color);
+}

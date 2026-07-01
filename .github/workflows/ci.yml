@@ -25,6 +25,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Build web bundle for embed
+        working-directory: crates/app/web
+        run: npm ci && npm run build
+
       - name: Cache cargo registry + build artifacts
         uses: actions/cache@v4
         with:
@@ -63,6 +73,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Build web bundle for embed
+        working-directory: crates/app/web
+        run: npm ci && npm run build
 
       # Confirm the full Xcode + iphoneos SDK is present (macOS runners ship
       # Xcode; the ring C/asm build for iOS needs the iphoneos SDK).
@@ -107,9 +127,9 @@ jobs:
           cache: npm
           cache-dependency-path: crates/app/web/package-lock.json
 
-      - name: Install web UI dev deps
+      - name: Install web UI deps and build
         working-directory: crates/app/web
-        run: npm ci
+        run: npm ci && npm run build
 
       - name: Install Playwright Chromium
         working-directory: crates/app/web
@@ -117,8 +137,11 @@ jobs:
 
       - name: Start static server
         working-directory: crates/app/web
-        run: python3 -m http.server 8765 &
+        run: npx vite preview --port 8765 --host 127.0.0.1 &
+
+      - name: Wait for preview server
+        run: sleep 2
 
       - name: Run UI verification
         working-directory: crates/app/web
-        run: node verify-ui.mjs
+        run: node verify-ui.mjs && node verify-native-shell.mjs

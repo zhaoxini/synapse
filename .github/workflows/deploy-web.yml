@@ -38,10 +38,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: crates/app/web/package-lock.json
+
+      - name: Build Ionic web bundle
+        working-directory: crates/app/web
+        run: npm ci && npm run build
+
       - name: Prepare static site
         run: |
           mkdir -p _site
-          cp -r crates/app/web/* _site/
+          cp -r crates/app/web/dist/* _site/
           cat > _site/deploy-info.txt <<EOF
           branch=${{ github.ref_name }}
           sha=${{ github.sha }}
@@ -83,7 +93,7 @@ jobs:
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           rsync -avz --delete \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
-            crates/app/web/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+            crates/app/web/dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
 
       - name: Reload nginx (if present)
         uses: appleboy/ssh-action@v1.2.0

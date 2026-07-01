@@ -2,7 +2,22 @@
 
 Mobile web chat UI embedded in iOS WKWebView (`crates/app/web/`). Visual target: **Cursor mobile light theme** with **iOS interaction patterns** (spacing, touch targets, sheets, search bar).
 
-This document is the source of truth for tokens, component structure, and layout rules. Implementation lives in `app.css` + `index.html` + `app.js`.
+This document is the source of truth for tokens, component structure, and layout rules. Implementation lives in **Ionic React** (`src/App.tsx`) + **synapse-core** (`public/synapse-core.js`) + `src/theme/synapse.css`.
+
+---
+
+## Stack (Ionic React)
+
+| Piece | Path | Role |
+|-------|------|------|
+| **Ionic shell** | `src/App.tsx`, `src/main.tsx` | `IonApp` iOS mode, DOM skeleton for workspaces/chat |
+| **Chat core** | `public/synapse-core.js` | WS client, streaming renderer, composer logic (legacy imperative JS) |
+| **Theme** | `src/theme/synapse.css`, `src/theme/variables.css` | Cursor-light + iOS HIG tokens, Ionic overrides |
+| **Build** | Vite → `dist/` | `npm run dev` (live reload), `npm run build` (embed + Pages) |
+
+**Dev:** `cd crates/app/web && npm run dev` → http://127.0.0.1:8770  
+**Verify:** `./scripts/verify-web.sh` (builds + Vite preview + Playwright)  
+**Ship:** `npm run build` then `cargo build` (embeds `dist/` via `crates/app/src/web.rs`)
 
 ---
 

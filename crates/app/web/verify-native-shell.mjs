@@ -42,7 +42,8 @@ async function main() {
   const page = await browser.newPage({ viewport: { width: 393, height: 852 } });
   try {
     await page.goto(`${STATIC}/?shell=native&host=127.0.0.1&port=${WS_PORT}&token=TEST&tls=0`);
-    await page.waitForTimeout(600);
+    await page.waitForFunction(() => window.__synapse?.state, { timeout: 8000 });
+    await page.waitForTimeout(400);
 
     (await page.locator("body.mode-native-shell").count()) > 0
       ? ok("Native shell body class") : fail("mode-native-shell missing");
