@@ -852,6 +852,7 @@ function closeSheet() {
   $("sheetMask").classList.remove("show");
   $("bottomSheet").classList.remove("show");
   $("bottomSheet").classList.remove("dragging");
+  $("bottomSheet").classList.remove("sheet-picker");
   $("bottomSheet").style.transform = "";
 }
 function openThinkingSheet(text, secs) {
@@ -896,6 +897,84 @@ function openWorkSheet(items, tn, secs) {
   }
   const title = secs > 0 ? `Worked for ${fmtElapsed(secs)}` : "Details";
   openSheet(title, wrap);
+}
+
+const MODEL_SEARCH_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+const MODEL_MORE_SVG = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="5" cy="10" r="1.2" fill="currentColor"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/></svg>`;
+
+function openModelSheet() {
+  closeMenus();
+  const cur = currentModelId();
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+
+  const searchWrap = document.createElement("div");
+  searchWrap.className = "model-search-wrap";
+  searchWrap.innerHTML = `<span class="model-search-ic">${MODEL_SEARCH_SVG}</span>`;
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "model-search";
+  search.placeholder = "Search";
+  search.autocomplete = "off";
+  searchWrap.appendChild(search);
+  wrap.appendChild(searchWrap);
+
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+
+  const addSection = (title) => {
+    const h = document.createElement("div");
+    h.className = "model-section";
+    h.textContent = title;
+    list.appendChild(h);
+  };
+
+  const addRow = (id, label, showMore) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-row" + (id === cur ? " sel" : "");
+    row.dataset.id = id;
+    row.innerHTML =
+      `<span class="model-row-label">${escapeHtml(label)}</span>` +
+      (id === cur
+        ? `<span class="model-row-check" aria-label="Selected">✓</span>`
+        : (showMore ? `<span class="model-row-more">${MODEL_MORE_SVG}</span>` : ""));
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".model-row-more")) return;
+      chooseModel(id);
+    });
+    list.appendChild(row);
+  };
+
+  const renderList = (q) => {
+    list.innerHTML = "";
+    const query = (q || "").trim().toLowerCase();
+    if (!query || "auto".includes(query)) {
+      addSection("Active");
+      addRow("", "Auto", false);
+    }
+    const models = state.models.filter((m) =>
+      !query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query)
+    );
+    if (models.length) {
+      addSection("More");
+      for (const m of models) addRow(m.id, m.label, true);
+    } else if (query && query !== "auto") {
+      addSection("More");
+      const empty = document.createElement("div");
+      empty.className = "model-empty";
+      empty.textContent = "No models match your search";
+      list.appendChild(empty);
+    }
+  };
+
+  search.addEventListener("input", () => renderList(search.value));
+  renderList("");
+  wrap.appendChild(list);
+
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Model", wrap);
+  requestAnimationFrame(() => search.focus());
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -2127,7 +2206,6 @@ function syncLocalLabel() {
   if (ll) ll.textContent = c ? basename(c) : "Local";
 }
 function closeMenus() {
-  $("modelMenu").classList.remove("show");
   $("localMenu").classList.remove("show");
   const am = $("attachMenu"); if (am) am.classList.remove("show");
   const pm = $("permMenu"); if (pm) pm.classList.remove("show");
@@ -2157,14 +2235,16 @@ function toggleMenu(id, build) {
 }
 function chooseModel(id) {
   closeMenus();
+  closeSheet();
   if (state.activeId) {
     send({ op: "set_model", sessionId: state.activeId, model: id });
     const s = state.sessions.find(x => x.id === state.activeId);
-    if (s) s.model = id;                 // optimistic; the broadcast confirms
+    if (s) s.model = id;
   } else {
     state.pendingModel = id;
   }
   syncModelLabel();
+  haptic("light");
 }
 function chooseCwd(path) {
   closeMenus();
@@ -2174,9 +2254,9 @@ function chooseCwd(path) {
 }
 $("modelCtl").addEventListener("click", (e) => {
   e.stopPropagation();
-  toggleMenu("modelMenu", () => openMenu("modelMenu",
-    state.models.map(m => ({ id: m.id, label: m.label })),
-    currentModelId(), chooseModel, "No models configured"));
+  const open = $("bottomSheet").classList.contains("show") && $("sheetTitle").textContent === "Model";
+  if (open) closeSheet();
+  else openModelSheet();
 });
 // The project menu always offers a free-text path (to start a session in a repo
 // not in the discovered list), then the discovered git repos. openMenu() bails

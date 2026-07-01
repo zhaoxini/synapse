@@ -143,6 +143,18 @@ async function main() {
     const sendDisabled = await page.locator("#sendBtn").isDisabled();
     sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
 
+    await page.locator("#modelCtl").click();
+    await page.waitForTimeout(150);
+    (await page.locator("#sheetTitle").textContent()) === "Model"
+      ? ok("Model picker sheet opens") : fail("Model sheet title wrong");
+    (await page.locator(".model-section", { hasText: "Active" }).count()) > 0
+      ? ok("Model Active section") : fail("Model Active section missing");
+    (await page.locator(".model-search").isVisible())
+      ? ok("Model search bar") : fail("Model search missing");
+    (await page.locator(".model-row", { hasText: "Sonnet" }).count()) > 0
+      ? ok("Model list from server") : fail("Model rows missing");
+    await page.locator("#sheetClose").click();
+
     // thinking stream → sheet content
     await page.evaluate(() => {
       const { handleEvent } = window.__synapse;
