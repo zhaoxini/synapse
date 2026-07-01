@@ -1841,9 +1841,14 @@ function workspacePaths() {
 }
 
 function workspaceLabel(path) {
-  const parts = String(path || "").split("/").filter(Boolean);
-  if (parts.length >= 3) return parts.slice(-2).join("/");
-  return basename(path);
+  const norm = normalizePath(path);
+  const parts = norm.split("/").filter(Boolean);
+  if (parts.length < 2) return parts[0] || norm || "";
+  const last = parts[parts.length - 1];
+  const prev = parts[parts.length - 2];
+  const generic = new Set(["workspace", "workspaces", "Users", "home", "var", "tmp", "opt", "code", "projects"]);
+  if (parts.length >= 3 && !generic.has(prev)) return `${prev}/${last}`;
+  return last;
 }
 
 function renderSessionDrawerBody(path) {
