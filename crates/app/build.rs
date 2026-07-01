@@ -1,19 +1,21 @@
 fn main() {
     slint_build::compile("ui/app.slint").unwrap();
 
-    // The web chat bundle is baked into the binary via include_str!/include_bytes!
-    // in src/web.rs. Those assets are NOT .rs files, so editing them did not always
-    // invalidate the crate's fingerprint — which shipped a STALE bundle to iOS
-    // (the Xcode run-script reused a cached .a). Declare each embedded asset a build
-    // input so any bundle change forces a recompile. Keep in sync with web::asset().
+    // Ionic web bundle: built to web/dist/ via `npm run build`. Track sources so
+    // edits invalidate; CI/local must run the build before `cargo build`.
+    println!("cargo:rerun-if-changed=web/dist/index.html");
+    println!("cargo:rerun-if-changed=web/dist/assets/app.js");
+    println!("cargo:rerun-if-changed=web/dist/assets/app.css");
+    println!("cargo:rerun-if-changed=web/dist/synapse-core.js");
     for f in [
         "web/index.html",
-        "web/app.css",
-        "web/app.js",
-        "web/vendor/marked.min.js",
-        "web/vendor/highlight.min.js",
-        "web/vendor/github-dark.min.css",
-        "web/vendor/github.min.css",
+        "web/vite.config.ts",
+        "web/src/main.tsx",
+        "web/src/App.tsx",
+        "web/public/synapse-core.js",
+        "web/src/theme/synapse.css",
+        "web/src/theme/variables.css",
+        "web/public/logo.svg",
     ] {
         println!("cargo:rerun-if-changed={f}");
     }

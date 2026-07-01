@@ -79,6 +79,8 @@ async function main() {
 
   try {
     await page.goto(STATIC);
+    await page.waitForSelector("#connectOverlay", { timeout: 8000 });
+    await page.waitForFunction(() => window.__synapse?.state, { timeout: 8000 });
     const overlayVisible = await page.locator("#connectOverlay").isVisible();
     overlayVisible ? ok("Pairing overlay shown without creds") : fail("Pairing overlay missing");
 
@@ -88,7 +90,8 @@ async function main() {
       }));
     }, WS_PORT);
     await page.reload();
-    await page.waitForTimeout(800);
+    await page.waitForFunction(() => window.__synapse?.state?.connected, { timeout: 8000 });
+    await page.waitForTimeout(300);
 
     !(await page.locator("#connectOverlay").isVisible())
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
