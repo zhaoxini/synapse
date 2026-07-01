@@ -265,6 +265,9 @@ pub fn default_device_name() -> String {
         .unwrap_or_else(|| "My Computer".to_string())
 }
 
+/// Default relay for end users (also embedded at compile time via build.rs).
+pub const DEFAULT_RELAY: &str = "wss://zx0623.duckdns.org";
+
 pub fn default_relay_url() -> Option<String> {
     std::env::var("SYNAPSE_RELAY")
         .ok()
@@ -272,7 +275,7 @@ pub fn default_relay_url() -> Option<String> {
         .or_else(|| {
             let baked = env!("SYNAPSE_DEFAULT_RELAY");
             if baked.is_empty() {
-                None
+                Some(DEFAULT_RELAY.to_string())
             } else {
                 Some(baked.to_string())
             }
@@ -306,11 +309,9 @@ pub async fn interactive_setup() -> Result<Config> {
             u
         }
         None => {
-            let url = read_line("Relay server [wss://relay.example.com]: ")?;
+            let url = read_line(&format!("Relay server [{DEFAULT_RELAY}]: "))?;
             if url.is_empty() {
-                bail!(
-                    "relay URL required — set SYNAPSE_RELAY or rebuild with SYNAPSE_RELAY=wss://…"
-                );
+                bail!("relay URL required — set SYNAPSE_RELAY or use default {DEFAULT_RELAY}");
             }
             url
         }
