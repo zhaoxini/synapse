@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Install synapse-relay on a Linux VPS with TLS (Let's Encrypt).
 #
-# One-liner (run as root on your VPS):
+# China-friendly (mirror on relay VPS):
+#   curl -fsSL https://zx0623.duckdns.org/install-relay.sh | sudo bash
+#
+# Direct from GitHub Releases:
 #   curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install-relay.sh | sudo bash
 #
 # Custom domain / email:
@@ -11,6 +14,7 @@ set -euo pipefail
 
 REPO="${SYNAPSE_REPO:-zhaoxini/synapse}"
 VERSION="${SYNAPSE_VERSION:-latest}"
+MIRROR="${SYNAPSE_MIRROR:-https://zx0623.duckdns.org}"
 RELAY_DOMAIN="${RELAY_DOMAIN:-zx0623.duckdns.org}"
 RELAY_PORT="${RELAY_PORT:-443}"
 RELAY_EMAIL="${RELAY_EMAIL:-admin@${RELAY_DOMAIN}}"
@@ -24,6 +28,56 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+gh_api_base() {
+  if [ -n "${MIRROR}" ]; then
+    printf '%s/ghapi' "${MIRROR}"
+  else
+    printf '%s' "https://api.github.com"
+  fi
+}
+
+release_base() {
+  if [ -n "${MIRROR}" ]; then
+    printf '%s/ghrel' "${MIRROR}"
+  else
+    printf '%s' "https://github.com"
+  fi
+}
+
+curl_get() {
+  local url="$1"
+  if curl -fsSL "${url}"; then
+    return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == https://api.github.com/* ]]; then
+    curl -fsSL "${MIRROR}/ghapi${url#https://api.github.com}"
+    return $?
+  fi
+  return 1
+}
+
+curl_get_file() {
+  local url="$1" out="$2"
+  local archive try
+  if [ -n "${MIRROR}" ] && [[ "${url}" == *"/releases/download/"* ]]; then
+    archive="${url##*/}"
+    try="${MIRROR}/releases/${archive}"
+    if curl -fsSL "${try}" -o "${out}"; then
+      return 0
+    fi
+  fi
+  if curl -fsSL "${url}" -o "${out}"; then
+    return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == "$(release_base)"/* ]]; then
+    curl -fsSL "${MIRROR}/ghrel${url#$(release_base)}" -o "${out}" && return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == https://github.com/* ]]; then
+    curl -fsSL "${MIRROR}/ghrel${url#https://github.com}" -o "${out}" && return 0
+  fi
+  return 1
 }
 
 require_root() {
@@ -50,7 +104,7 @@ detect_target() {
 resolve_version() {
   if [ "${VERSION}" = "latest" ]; then
     VERSION="$(
-      curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+      curl_get "$(gh_api_base)/repos/${REPO}/releases/latest" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -n1
     )"
@@ -112,11 +166,12 @@ install_binary() {
   resolve_version
   ver_no="${VERSION#v}"
   archive="synapse-${ver_no}-${target}.tar.gz"
-  url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
+  url="$(release_base)/${REPO}/releases/download/${VERSION}/${archive}"
 
   info "Downloading ${VERSION} (${target})..."
+  [ -n "${MIRROR}" ] && info "Mirror:   ${MIRROR}"
   TMPDIR_INSTALL="$(mktemp -d)"
-  curl -fsSL "${url}" -o "${TMPDIR_INSTALL}/${archive}"
+  curl_get_file "${url}" "${TMPDIR_INSTALL}/${archive}"
   tar -xzf "${TMPDIR_INSTALL}/${archive}" -C "${TMPDIR_INSTALL}"
   root="${TMPDIR_INSTALL}/synapse-${ver_no}-${target}"
   [ -x "${root}/bin/synapse-relay" ] || die "synapse-relay binary not found in archive"

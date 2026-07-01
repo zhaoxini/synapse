@@ -7,6 +7,14 @@ Your phone connects through the Synapse cloud relay — no port forwarding or ma
 
 ### One-line install (macOS / Linux)
 
+**国内推荐（走 relay 镜像，无需访问 githubusercontent）：**
+
+```sh
+curl -fsSL https://zx0623.duckdns.org/install.sh | bash
+```
+
+**GitHub Releases 直连：**
+
 ```sh
 curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 ```
@@ -59,7 +67,10 @@ Saved to `~/.synapse/config.json` after first sign-in.
 This package also includes `bin/synapse-relay` — deploy on your VPS:
 
 ```sh
-# One-line install on a Linux VPS (TLS via Let's Encrypt)
+# 国内推荐
+curl -fsSL https://zx0623.duckdns.org/install-relay.sh | sudo bash
+
+# GitHub 直连
 curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install-relay.sh | sudo bash
 ```
 

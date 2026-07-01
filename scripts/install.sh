@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Install synapse-server (and synapse-relay) from GitHub Releases.
 #
-# One-liner:
+# China-friendly (mirror on relay VPS):
+#   curl -fsSL https://zx0623.duckdns.org/install.sh | bash
+#
+# Direct from GitHub Releases:
 #   curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 #
 # Pin a version:
 #   SYNAPSE_VERSION=v0.2.0 curl -fsSL ... | bash
+#
+# Force direct GitHub (skip mirror):
+#   SYNAPSE_MIRROR= curl -fsSL https://zx0623.duckdns.org/install.sh | bash
 
 set -euo pipefail
 
 REPO="${SYNAPSE_REPO:-zhaoxini/synapse}"
 VERSION="${SYNAPSE_VERSION:-latest}"
+# Temporary mirror when raw.githubusercontent.com / github.com is unreachable.
+MIRROR="${SYNAPSE_MIRROR:-https://zx0623.duckdns.org}"
 TMPDIR_INSTALL=""
 
 info() { printf '==> %s\n' "$*"; }
@@ -19,6 +27,61 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+gh_api_base() {
+  if [ -n "${MIRROR}" ]; then
+    printf '%s/ghapi' "${MIRROR}"
+  else
+    printf '%s' "https://api.github.com"
+  fi
+}
+
+release_base() {
+  if [ -n "${MIRROR}" ]; then
+    printf '%s/ghrel' "${MIRROR}"
+  else
+    printf '%s' "https://github.com"
+  fi
+}
+
+curl_get() {
+  local url="$1"
+  if curl -fsSL "${url}"; then
+    return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == https://api.github.com/* ]]; then
+    curl -fsSL "${MIRROR}/ghapi${url#https://api.github.com}"
+    return $?
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == https://github.com/* ]]; then
+    curl -fsSL "${MIRROR}/ghrel${url#https://github.com}"
+    return $?
+  fi
+  return 1
+}
+
+curl_get_file() {
+  local url="$1" out="$2"
+  local ver_no archive try
+  # Static cache on mirror (fast, no GitHub needed)
+  if [ -n "${MIRROR}" ] && [[ "${url}" == *"/releases/download/"* ]]; then
+    archive="${url##*/}"
+    try="${MIRROR}/releases/${archive}"
+    if curl -fsSL "${try}" -o "${out}"; then
+      return 0
+    fi
+  fi
+  if curl -fsSL "${url}" -o "${out}"; then
+    return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == "$(release_base)"/* ]]; then
+    curl -fsSL "${MIRROR}/ghrel${url#$(release_base)}" -o "${out}" && return 0
+  fi
+  if [ -n "${MIRROR}" ] && [[ "${url}" == https://github.com/* ]]; then
+    curl -fsSL "${MIRROR}/ghrel${url#https://github.com}" -o "${out}" && return 0
+  fi
+  return 1
 }
 
 detect_target() {
@@ -40,7 +103,7 @@ detect_target() {
 resolve_version() {
   if [ "${VERSION}" = "latest" ]; then
     VERSION="$(
-      curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+      curl_get "$(gh_api_base)/repos/${REPO}/releases/latest" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -n1
     )"
@@ -92,15 +155,16 @@ main() {
   resolve_version
   ver_no="${VERSION#v}"
   archive="synapse-${ver_no}-${target}.tar.gz"
-  url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
+  url="$(release_base)/${REPO}/releases/download/${VERSION}/${archive}"
 
   info "Synapse installer"
   info "Release:  ${VERSION} (${target})"
+  [ -n "${MIRROR}" ] && info "Mirror:   ${MIRROR}"
   info "URL:      ${url}"
 
   TMPDIR_INSTALL="$(mktemp -d)"
 
-  curl -fsSL "${url}" -o "${TMPDIR_INSTALL}/${archive}"
+  curl_get_file "${url}" "${TMPDIR_INSTALL}/${archive}"
   tar -xzf "${TMPDIR_INSTALL}/${archive}" -C "${TMPDIR_INSTALL}"
   root="${TMPDIR_INSTALL}/synapse-${ver_no}-${target}"
   [ -d "${root}" ] || die "unexpected archive layout (missing ${root})"
