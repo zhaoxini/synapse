@@ -253,13 +253,10 @@ function handle(v) {
       if (state.view === "workspaces") renderWorkspaces();
       break;
     case "history":
-      state.loadingHistory = false;
-      // Ignore a stale response for a session we've navigated away from: a slow
-      // history (large transcript, mobile link) can land after the user switched,
-      // painting the wrong session's messages under the new one ("session错乱").
-      // Mirrors the live-event guard below.
       if (v.sessionId && v.sessionId !== state.activeId) break;
+      endHistoryLoad();
       if (v.found !== false) ingestHistory(v.events || []);
+      else clearMessages();
       break;
     case "event": handleEvent(v.event); break;
     case "error":
@@ -1286,6 +1283,7 @@ function pushStderr(text) {
 }
 
 function echoUser(text, mid) {
+  endHistoryLoad();
   // dedupe: don't re-add a user turn we already echoed for this mid
   if (mid) {
     const existing = state.blocks.find(b => b.role === "user" && b.mid === mid);
@@ -1304,6 +1302,7 @@ function echoUser(text, mid) {
 }
 
 function addBlock(el) {
+  endHistoryLoad();
   state.blocks.push({ el });
   messagesEl.appendChild(el);
   emptyEl.classList.add("hidden");
@@ -1313,19 +1312,23 @@ function clearMessages() {
   messagesEl.innerHTML = "";
   state.blocks = [];
   permEl = null;
-  state.loadingHistory = false;
+  endHistoryLoad();
   emptyEl.classList.remove("hidden");
 }
 
-function showHistorySkeleton() {
+function beginHistoryLoad() {
+  state.loadingHistory = true;
   messagesEl.innerHTML = "";
   state.blocks = [];
-  for (let i = 0; i < 3; i++) {
-    const sk = document.createElement("div");
-    sk.className = "msg-skeleton";
-    messagesEl.appendChild(sk);
-  }
   emptyEl.classList.add("hidden");
+  scroller.classList.add("history-loading");
+}
+
+function endHistoryLoad() {
+  if (!state.loadingHistory && !scroller.classList.contains("history-loading")) return;
+  state.loadingHistory = false;
+  scroller.classList.remove("history-loading");
+  messagesEl.querySelectorAll(".msg-skeleton").forEach((el) => el.remove());
 }
 
 // =================== smart scroll ===================
@@ -1862,7 +1865,7 @@ function select(id) {
   clearMessages();
   state.turn = null;
   state.loadingHistory = true;
-  showHistorySkeleton();
+  beginHistoryLoad();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
   showChat();

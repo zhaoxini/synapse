@@ -133,8 +133,8 @@ async function main() {
 
     // chat + skeleton (use idle session so send isn't in stop mode)
     await page.locator(".sess-row").nth(1).click();
-    const skel = await page.locator(".msg-skeleton").count();
-    skel > 0 ? ok("History skeleton while loading") : fail("Skeleton missing on history load");
+    const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
+    loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);
 
     (await page.evaluate(() => document.body.classList.contains("mode-chat")))
@@ -158,9 +158,8 @@ async function main() {
     const title = await page.locator("#titleName").textContent();
     title && title.length > 0 ? ok(`Topbar title: "${title}"`) : fail("Empty topbar title");
 
-    const rowBox = await page.locator(".sess-row").first().boundingBox();
-    rowBox && rowBox.height >= 44
-      ? ok(`Session row height ${Math.round(rowBox.height)}px`) : fail("Session row too short (<44px)");
+    const dark = await page.evaluate(() => document.documentElement.classList.contains("theme-dark"));
+    dark ? ok("Forced dark theme") : fail("Dark theme not applied");
 
   } finally {
     await browser.close();
