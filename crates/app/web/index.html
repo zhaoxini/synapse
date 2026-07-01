@@ -19,18 +19,6 @@
       <div id="titleName">Synapse</div>
     </div>
     <div class="topbar-right">
-      <button id="workspaceBtn" class="iconbtn" aria-label="Workspaces">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3.5 6.5h5v5h-5v-5zm8 0h5v5h-5v-5zm-8 8h5v5h-5v-5zm8 0h5v5h-5v-5z" stroke="currentColor" stroke-width="1.4"/></svg>
-      </button>
-      <button id="searchBtn" class="iconbtn" aria-label="Search">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      </button>
-      <button id="refreshBtn" class="iconbtn" aria-label="Refresh">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M16 10a6 6 0 1 1-1.8-4.2M16 4v4h-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button id="selectBtn" class="iconbtn" aria-label="Select sessions">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="4" y="4" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7.5 10l2 2 3.5-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
       <button id="newBtn" class="iconbtn" aria-label="New session">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       </button>
@@ -43,21 +31,8 @@
   <!-- Session list (no composer) -->
   <section id="sessionView">
     <div id="pullRefresh" class="hidden" aria-hidden="true"><span class="pull-spin"></span><span class="pull-label">Release to refresh</span></div>
-    <div id="searchWrap" class="hidden">
-      <input id="search" type="search" placeholder="Search sessions" autocomplete="off" />
-    </div>
     <div id="sessionList"></div>
     <button type="button" id="archivedToggle" class="archived-toggle hidden">Show archived</button>
-    <div id="sessionToolbar" class="hidden">
-      <span id="selectCount">0 selected</span>
-      <button type="button" id="selectArchive" class="toolbar-btn">Archive</button>
-      <button type="button" id="selectCancel" class="toolbar-btn secondary">Cancel</button>
-    </div>
-  </section>
-
-  <!-- Workspaces (repo picker) -->
-  <section id="workspaceView">
-    <div id="workspaceList"></div>
   </section>
 
   <!-- Chat (composer only here) -->
