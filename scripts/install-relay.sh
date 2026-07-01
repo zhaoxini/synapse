@@ -2,7 +2,7 @@
 # Install synapse-relay on a Linux VPS with TLS (Let's Encrypt).
 #
 # One-liner (run as root on your VPS):
-#   curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install-relay.sh | sudo bash
+#   curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install-relay.sh | sudo bash
 #
 # Custom domain / email:
 #   RELAY_DOMAIN=relay.example.com RELAY_EMAIL=you@example.com sudo bash install-relay.sh

@@ -26,7 +26,7 @@ Then it prints a **6-digit pairing code** — enter it in the Synapse mobile app
 
 ```sh
 # One-line install
-curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install.sh | bash
+curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 
 # Or Homebrew
 brew tap zhaoxini/synapse https://github.com/zhaoxini/synapse

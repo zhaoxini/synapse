@@ -2,7 +2,7 @@
 # Install synapse-server (and synapse-relay) from GitHub Releases.
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install.sh | bash
+#   curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 #
 # Pin a version:
 #   SYNAPSE_VERSION=v0.2.0 curl -fsSL ... | bash

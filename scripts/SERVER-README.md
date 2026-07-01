@@ -8,7 +8,7 @@ Your phone connects through the Synapse cloud relay — no port forwarding or ma
 ### One-line install (macOS / Linux)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install.sh | bash
+curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install.sh | bash
 ```
 
 ### Homebrew (macOS / Linuxbrew)
@@ -60,7 +60,7 @@ This package also includes `bin/synapse-relay` — deploy on your VPS:
 
 ```sh
 # One-line install on a Linux VPS (TLS via Let's Encrypt)
-curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install-relay.sh | sudo bash
+curl -fsSL https://github.com/zhaoxini/synapse/releases/latest/download/install-relay.sh | sudo bash
 ```
 
 Default relay domain: `wss://zx0623.duckdns.org` (baked into release `synapse-server` builds).
