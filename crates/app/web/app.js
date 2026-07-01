@@ -26,13 +26,10 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
-  view: "sessions", // "sessions" | "chat" | "workspaces"
+  view: "sessions", // "sessions" | "chat"
   creating: false,
   loadingHistory: false,
-  selectMode: false,
-  selectedIds: new Set(),
   showArchived: false,
-  filterCwd: null,
   activeId: "",
   sessions: [],
   models: [],          // model catalog from hello: [{id,label}]
@@ -250,7 +247,6 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
-      if (state.view === "workspaces") renderWorkspaces();
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -1556,52 +1552,18 @@ function sessionSubtitle(s) {
 
 let navFromPop = false;
 
-function exitSelectMode() {
-  state.selectMode = false;
-  state.selectedIds.clear();
-  document.body.classList.remove("select-mode");
-  $("sessionToolbar").classList.add("hidden");
-  $("selectBtn").classList.remove("active");
-  updateSelectCount();
-}
-
-function updateSelectCount() {
-  const n = state.selectedIds.size;
-  $("selectCount").textContent = n ? `${n} selected` : "Select sessions";
-  const btn = $("selectArchive");
-  btn.textContent = state.showArchived ? "Unarchive" : "Archive";
-  btn.disabled = n === 0;
-}
-
 function showSessions() {
   state.view = "sessions";
   document.body.classList.add("mode-sessions");
-  document.body.classList.remove("mode-chat", "mode-workspaces");
-  document.body.classList.toggle("filter-cwd", !!state.filterCwd);
-  closeSearch();
+  document.body.classList.remove("mode-chat");
   updateTopbar();
   renderSessions();
 }
 
-function showWorkspaces(pushHistory) {
-  state.view = "workspaces";
-  document.body.classList.remove("mode-sessions", "mode-chat");
-  document.body.classList.add("mode-workspaces");
-  closeSearch();
-  exitSelectMode();
-  updateTopbar();
-  renderWorkspaces();
-  if (pushHistory !== false && !navFromPop) {
-    history.pushState({ synapse: "workspaces" }, "", location.href);
-  }
-}
-
 function showChat(pushHistory) {
   state.view = "chat";
-  document.body.classList.remove("mode-sessions", "mode-workspaces");
+  document.body.classList.remove("mode-sessions");
   document.body.classList.add("mode-chat");
-  closeSearch();
-  exitSelectMode();
   updateTopbar();
   if (pushHistory !== false && !navFromPop) {
     history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
@@ -1609,76 +1571,12 @@ function showChat(pushHistory) {
   requestAnimationFrame(() => { if (inputEl) inputEl.focus(); });
 }
 
-function closeSearch() {
-  const wrap = $("searchWrap");
-  if (!wrap.classList.contains("hidden")) {
-    wrap.classList.add("hidden");
-    $("search").value = "";
-    $("searchBtn").classList.remove("active");
-  }
-}
-
 function updateTopbar() {
-  if (state.view === "workspaces") {
-    titleName.textContent = "Workspaces";
-  } else if (state.view === "sessions") {
-    titleName.textContent = state.filterCwd ? basename(state.filterCwd) : workspaceName();
+  if (state.view === "sessions") {
+    titleName.textContent = workspaceName();
   } else {
     const s = state.sessions.find(x => x.id === state.activeId);
     titleName.textContent = s ? cleanTitle(s.name) : "Chat";
-  }
-}
-
-function buildWorkspaces() {
-  const map = new Map();
-  for (const p of state.cwds) map.set(p, { cwd: p, count: 0, lastActive: 0, busy: 0 });
-  for (const s of state.sessions) {
-    if (!map.has(s.cwd)) map.set(s.cwd, { cwd: s.cwd, count: 0, lastActive: 0, busy: 0 });
-    const w = map.get(s.cwd);
-    if (!s.archived) w.count++;
-    if (s.state === "busy") w.busy++;
-    w.lastActive = Math.max(w.lastActive, s.started_at || 0);
-  }
-  return [...map.values()].sort((a, b) => b.lastActive - a.lastActive);
-}
-
-function renderWorkspaces() {
-  const list = $("workspaceList");
-  list.innerHTML = "";
-  const items = buildWorkspaces();
-  if (!items.length) {
-    const hint = document.createElement("div");
-    hint.className = "empty-hint";
-    hint.textContent = "No projects found — add repos in Claude Code";
-    list.appendChild(hint);
-    return;
-  }
-  for (const w of items) {
-    const row = document.createElement("div");
-    row.className = "ws-row";
-    const meta = w.busy
-      ? `${w.count} session${w.count !== 1 ? "s" : ""} · Working`
-      : `${w.count} session${w.count !== 1 ? "s" : ""}`;
-    row.innerHTML =
-      `<div class="ws-icon">⎇</div>` +
-      `<div class="ws-body"><div class="ws-name">${escapeHtml(basename(w.cwd))}</div>` +
-      `<div class="ws-meta">${escapeHtml(meta)}</div></div>` +
-      `<button type="button" class="ws-new" aria-label="New session in ${escapeHtml(basename(w.cwd))}">+</button>`;
-    row.title = w.cwd;
-    row.querySelector(".ws-body").addEventListener("click", () => {
-      state.filterCwd = w.cwd;
-      state.pendingCwd = w.cwd;
-      showSessions();
-      haptic("light");
-    });
-    row.querySelector(".ws-new").addEventListener("click", (e) => {
-      e.stopPropagation();
-      state.pendingCwd = w.cwd;
-      state.filterCwd = w.cwd;
-      newSession();
-      haptic("light");
-    });
-    list.appendChild(row);
   }
 }
 
@@ -1686,7 +1584,6 @@ function bindSwipeRow(wrap, s) {
   const row = wrap.querySelector(".sess-row");
   let startX = 0, dx = 0, dragging = false;
   row.addEventListener("touchstart", (e) => {
-    if (state.selectMode) return;
     startX = e.touches[0].clientX;
     dragging = true;
     document.querySelectorAll(".sess-swipe-wrap.open").forEach(w => {
@@ -1726,7 +1623,6 @@ function bindLongPress(row, s) {
   let timer = null;
   const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
   row.addEventListener("touchstart", () => {
-    if (state.selectMode) return;
     timer = setTimeout(() => { haptic("medium"); showRowContext(s); }, 480);
   }, { passive: true });
   row.addEventListener("touchend", clear);
@@ -1735,7 +1631,6 @@ function bindLongPress(row, s) {
 }
 
 function renderSessions() {
-  const q = ($("search").value || "").toLowerCase();
   const list = $("sessionList");
   list.innerHTML = "";
   const archivedAny = state.sessions.some(s => s.archived);
@@ -1744,8 +1639,6 @@ function renderSessions() {
 
   const f = state.sessions
     .filter(s => state.showArchived ? s.archived : !s.archived)
-    .filter(s => !state.filterCwd || s.cwd === state.filterCwd)
-    .filter(s => !q || (s.name || "").toLowerCase().includes(q) || (s.cwd || "").toLowerCase().includes(q))
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
       return (b.started_at || 0) - (a.started_at || 0);
@@ -1754,13 +1647,8 @@ function renderSessions() {
   if (!f.length && !state.creating) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    const msg = state.filterCwd
-      ? `No sessions in ${basename(state.filterCwd)}`
-      : (q ? "No matching sessions" : "No sessions yet");
-    hint.innerHTML = q || state.filterCwd
-      ? msg
-      : `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
-    if (!q && !state.filterCwd) hint.querySelector(".empty-cta").addEventListener("click", newSession);
+    hint.innerHTML = `No sessions yet<br><button type="button" class="empty-cta">New session</button>`;
+    hint.querySelector(".empty-cta").addEventListener("click", newSession);
     list.appendChild(hint);
     return;
   }
@@ -1769,7 +1657,6 @@ function renderSessions() {
     const row = document.createElement("div");
     row.className = "sess-row creating";
     row.innerHTML =
-      `<div class="sess-icon">…</div>` +
       `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
       `<div class="sess-sub working">Working</div></div>`;
     const head = document.createElement("div");
@@ -1807,36 +1694,15 @@ function renderSessions() {
       const subHtml = sub.html
         ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
         : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
-      const icon = s.pinned ? "★" : (s.state === "busy" ? "◐" : "+");
+      const pin = s.pinned ? `<span class="sess-pin" aria-label="Pinned">★</span>` : "";
       row.innerHTML =
-        `<div class="sess-check" aria-hidden="true"></div>` +
-        `<div class="sess-icon">${icon}</div>` +
         `<div class="sess-body">` +
-          `<div class="sess-title">${escapeHtml(cleanTitle(s.name))}</div>` +
+          `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
           subHtml +
-        `</div>` +
-        `<button class="sess-more" aria-label="Session actions">⋯</button>`;
+        `</div>`;
       wrap.appendChild(row);
       list.appendChild(wrap);
-
-      const check = row.querySelector(".sess-check");
-      if (state.selectedIds.has(s.id)) check.classList.add("on");
-
-      const onTap = () => {
-        if (state.selectMode) {
-          if (state.selectedIds.has(s.id)) state.selectedIds.delete(s.id);
-          else state.selectedIds.add(s.id);
-          check.classList.toggle("on", state.selectedIds.has(s.id));
-          updateSelectCount();
-          haptic("light");
-          return;
-        }
-        select(s.id);
-      };
-      row.addEventListener("click", onTap);
-      row.querySelector(".sess-more").addEventListener("click", (e) => {
-        e.stopPropagation(); rowMenu(s, e.currentTarget);
-      });
+      row.addEventListener("click", () => select(s.id));
       bindSwipeRow(wrap, s);
       bindLongPress(row, s);
     }
@@ -1920,12 +1786,6 @@ function doSend() {
 // =================== navigation ===================
 $("backBtn").addEventListener("click", () => {
   haptic("light");
-  if (state.view === "workspaces" || (state.view === "sessions" && state.filterCwd)) {
-    if (history.state && history.state.synapse === "workspaces") history.back();
-    else if (state.filterCwd) { state.filterCwd = null; showSessions(); }
-    else showSessions();
-    return;
-  }
   if (history.state && history.state.synapse === "chat") history.back();
   else showSessions();
 });
@@ -1934,51 +1794,13 @@ window.addEventListener("popstate", () => {
     navFromPop = true;
     showSessions();
     navFromPop = false;
-  } else if (state.view === "workspaces") {
-    navFromPop = true;
-    showSessions();
-    navFromPop = false;
   }
 });
 $("newBtn").addEventListener("click", newSession);
-$("workspaceBtn").addEventListener("click", () => showWorkspaces());
-$("refreshBtn").addEventListener("click", () => {
-  send({ op: "refresh" });
-  send({ op: "refresh_cwds" });
-  haptic("light");
-});
-$("selectBtn").addEventListener("click", () => {
-  state.selectMode = !state.selectMode;
-  document.body.classList.toggle("select-mode", state.selectMode);
-  $("selectBtn").classList.toggle("active", state.selectMode);
-  if (state.selectMode) {
-    $("sessionToolbar").classList.remove("hidden");
-    updateSelectCount();
-  } else exitSelectMode();
-  renderSessions();
-});
-$("selectCancel").addEventListener("click", () => { exitSelectMode(); renderSessions(); });
-$("selectArchive").addEventListener("click", () => {
-  const ids = [...state.selectedIds];
-  if (!ids.length) return;
-  if (state.showArchived) send({ op: "unarchive", sessionIds: ids });
-  else send({ op: "archive", sessionIds: ids });
-  exitSelectMode();
-  haptic("medium");
-});
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
-  updateSelectCount();
   renderSessions();
 });
-$("searchBtn").addEventListener("click", () => {
-  const wrap = $("searchWrap");
-  const hidden = wrap.classList.toggle("hidden");
-  $("searchBtn").classList.toggle("active", !hidden);
-  if (!hidden) $("search").focus();
-  else { $("search").value = ""; renderSessions(); }
-});
-$("search").addEventListener("input", renderSessions);
 
 function newSession() {
   if (state.creating) return;

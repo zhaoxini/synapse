@@ -112,24 +112,8 @@ async function main() {
     (await page.locator(".sess-row.pinned").count()) > 0
       ? ok("Pinned session row styled") : fail("Pinned row missing");
 
-    // workspaces
-    await page.locator("#workspaceBtn").click();
-    await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Workspaces view opens") : fail("Workspaces view failed");
-    (await page.locator(".ws-row").count()) >= 2
-      ? ok("Workspace rows rendered") : fail("Workspace rows missing");
-    await page.locator("#backBtn").click();
-    await page.waitForTimeout(200);
-
-    // select mode
-    await page.locator("#selectBtn").click();
-    (await page.evaluate(() => document.body.classList.contains("select-mode")))
-      ? ok("Select mode toggles") : fail("Select mode failed");
-    await page.locator(".sess-check").first().click();
-    (await page.locator(".sess-check.on").count()) > 0
-      ? ok("Session selection works") : fail("Selection toggle failed");
-    await page.locator("#selectCancel").click();
+    !(await page.locator("#workspaceBtn, #searchBtn, #refreshBtn, #selectBtn").count())
+      ? ok("No clutter topbar buttons") : fail("Unexpected topbar buttons present");
 
     // chat + skeleton (use idle session so send isn't in stop mode)
     await page.locator(".sess-row").nth(1).click();
@@ -151,9 +135,8 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("mode-sessions")))
       ? ok("Back returns to session list") : fail("Back did not return to list");
 
-    await page.locator("#searchBtn").click();
-    (await page.locator("#searchWrap:not(.hidden)").isVisible())
-      ? ok("Search bar toggles open") : fail("Search toggle broken");
+    (await page.locator("#newBtn").isVisible())
+      ? ok("New session button visible") : fail("New session button missing");
 
     const title = await page.locator("#titleName").textContent();
     title && title.length > 0 ? ok(`Topbar title: "${title}"`) : fail("Empty topbar title");
