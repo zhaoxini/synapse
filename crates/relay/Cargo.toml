@@ -22,8 +22,10 @@ futures-util = "0.3"
 rand = "0.8"
 http = "1"
 clap = { version = "4", features = ["derive"] }
-# TLS termination with a real certificate on the relay.
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
 rustls-pemfile = "2"
 dashmap = "6"
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

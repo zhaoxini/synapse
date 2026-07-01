@@ -107,6 +107,7 @@ function parsePairLink(link) {
   const params = new URLSearchParams(query);
   const token = params.get("token") || "";
   const tls = params.get("tls") === "1" || params.get("tls") === "true";
+  const deviceId = params.get("deviceId") || "";
   if (!token) return null;
 
   const slash = authPath.indexOf("/");
@@ -115,11 +116,11 @@ function parsePairLink(link) {
     const path = authPath.slice(slash);
     const { host, port } = splitHostPort(authority, tls);
     if (!host) return null;
-    return { host, port, token, tls, path };
+    return { host, port, token, tls, path, deviceId };
   }
   const { host, port } = splitHostPort(authPath, tls);
   if (!host) return null;
-  return { host, port, token, tls, path: "" };
+  return { host, port, token, tls, path: "", deviceId };
 }
 
 function splitHostPort(authority, tls) {
@@ -194,8 +195,13 @@ function pairFromForm() {
 
 function buildUrl(c) {
   const scheme = c.tls ? "wss" : "ws";
-  if (c.path) return `${scheme}://${c.host}:${c.port}${c.path}?token=${c.token}`;
-  return `${scheme}://${c.host}:${c.port}/?token=${c.token}`;
+  if (c.path) {
+    const q = c.deviceId
+      ? `deviceId=${encodeURIComponent(c.deviceId)}&token=${encodeURIComponent(c.token)}`
+      : `token=${encodeURIComponent(c.token)}`;
+    return `${scheme}://${c.host}:${c.port}${c.path}?${q}`;
+  }
+  return `${scheme}://${c.host}:${c.port}/?token=${encodeURIComponent(c.token)}`;
 }
 
 // =================== connection ===================

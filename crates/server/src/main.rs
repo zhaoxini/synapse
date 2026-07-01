@@ -1,3 +1,4 @@
+mod account;
 mod claude;
 mod history;
 mod http;
@@ -9,7 +10,7 @@ mod tls;
 mod tunnel;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use manager::SessionManager;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -17,83 +18,91 @@ use std::path::PathBuf;
 /// Synapse server — remote mobile control for the Claude Code CLI.
 #[derive(Parser, Debug)]
 #[command(name = "synapse-server", version)]
-struct Args {
-    /// HTTP/WS port.
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+    #[command(flatten)]
+    run: RunArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run the local bridge server (default when no subcommand is given).
+    Run,
+    /// Create an account and register this machine with the Synapse relay.
+    Register {
+        /// Relay URL, e.g. wss://relay.example.com or https://relay.example.com
+        #[arg(long)]
+        relay: String,
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        password: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+    /// Log in and register this machine with the Synapse relay.
+    Login {
+        #[arg(long)]
+        relay: String,
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        password: String,
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+    /// Print a short pairing code for the mobile app (requires prior login).
+    PairingCode,
+}
+
+/// Arguments for `synapse-server run` (also the default when no subcommand).
+#[derive(Parser, Debug)]
+struct RunArgs {
     #[arg(short, long, default_value = "4173")]
     port: u16,
-    /// Bind host.
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
-    /// Default working directory for new sessions.
     #[arg(long)]
     cwd: Option<PathBuf>,
-    /// Fixed pairing token (default: random 6-char code).
     #[arg(long)]
     token: Option<String>,
-    /// Path to the claude binary.
     #[arg(long)]
     bin: Option<PathBuf>,
-    /// Enable TLS (wss:// / https://). Use one of --tls-cert/--tls-key or
-    /// --tls-self-signed.
     #[arg(long)]
     tls: bool,
-    /// Path to a PEM certificate chain (enables TLS with --tls-key).
     #[arg(long)]
     tls_cert: Option<PathBuf>,
-    /// Path to the PEM private key matching --tls-cert.
     #[arg(long)]
     tls_key: Option<PathBuf>,
-    /// Generate an in-memory self-signed certificate for TLS. Optional comma-
-    /// separated --tls-san list adds hosts/IPs to the certificate.
     #[arg(long)]
     tls_self_signed: bool,
-    /// Comma-separated Subject Alternative Names (hosts/IPs) for the self-
-    /// signed certificate, e.g. "mybox,192.168.1.10".
     #[arg(long)]
     tls_san: Option<String>,
-    /// Where to persist a generated self-signed cert (PEM), if --tls-self-signed.
     #[arg(long)]
     tls_cert_out: Option<PathBuf>,
-    /// Where to persist a generated self-signed key (PEM), if --tls-self-signed.
     #[arg(long)]
     tls_key_out: Option<PathBuf>,
-    /// Host shown in the pairing QR code / URL. Defaults to an auto-detected
-    /// LAN IP (so phones on the same network can scan & connect). Use this to
-    /// override with a public hostname/IP for remote setups.
     #[arg(long)]
     pair_host: Option<String>,
-    /// Expose the server over the public internet via a Cloudflare Tunnel
-    /// (quick tunnel). Gives a public wss:// URL with a real certificate, so
-    /// any phone can reach this machine from anywhere with zero network setup.
     #[arg(long)]
     tunnel: bool,
-    /// Connect to a self-hosted Synapse relay for public-internet access. The
-    /// server dials this relay URL (wss://host/uplink?deviceId=...&token=...) as
-    /// an outbound uplink; mobile apps then reach this machine through the relay
-    /// from anywhere. Takes precedence over --tunnel for pairing. Example:
-    ///   --relay wss://relay.example.com/uplink
     #[arg(long)]
     relay: Option<String>,
-    /// Device id registered at the relay (default: a random id).
     #[arg(long)]
     relay_device_id: Option<String>,
-    /// Per-device token the app must present to reach this device via the relay.
-    /// Defaults to the pairing token.
     #[arg(long)]
     relay_token: Option<String>,
-    /// Verbose logging.
     #[arg(long)]
     dev: bool,
-    /// Default Claude model for all sessions (e.g. claude-sonnet-4-6).
-    /// Also read from SYNAPSE_DEFAULT_MODEL env var.
     #[arg(long)]
     default_model: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Select rustls' crypto provider up front so TLS works regardless of which
-    // transitive features are enabled by dependencies.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let log_dir = std::env::var_os("HOME")
@@ -120,7 +129,57 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
+    match cli.command {
+        None | Some(Commands::Run) => run_server(cli.run).await,
+        Some(Commands::Register {
+            relay,
+            email,
+            password,
+            name,
+            device_name,
+        }) => {
+            let device_name = device_name.unwrap_or_else(account::default_device_name);
+            let name = name.unwrap_or_default();
+            let cfg =
+                account::register_account(&relay, &email, &password, &name, &device_name).await?;
+            cfg.save()?;
+            println!("\n  Account registered and device linked.\n");
+            println!("  Email:       {}", cfg.user_email);
+            println!("  Device:      {} ({})", cfg.device_name, cfg.device_id);
+            println!("  Config:      {}", account::Config::path().display());
+            println!("\n  Run: synapse-server\n");
+            Ok(())
+        }
+        Some(Commands::Login {
+            relay,
+            email,
+            password,
+            device_name,
+        }) => {
+            let device_name = device_name.unwrap_or_else(account::default_device_name);
+            let cfg = account::login_account(&relay, &email, &password, &device_name).await?;
+            cfg.save()?;
+            println!("\n  Logged in and device registered.\n");
+            println!("  Email:       {}", cfg.user_email);
+            println!("  Device:      {} ({})", cfg.device_name, cfg.device_id);
+            println!("  Config:      {}", account::Config::path().display());
+            println!("\n  Run: synapse-server\n");
+            Ok(())
+        }
+        Some(Commands::PairingCode) => {
+            let cfg = account::Config::load()?.context("not logged in — run synapse-server login first")?;
+            let code = account::create_pairing_code(&cfg).await?;
+            println!("\n  Pairing code:  {}\n", code.code);
+            println!("  Expires in {} seconds.", code.expires_in);
+            println!("  Enter this code in the Synapse app (same account: {}).\n", cfg.user_email);
+            Ok(())
+        }
+    }
+}
+
+async fn run_server(args: RunArgs) -> Result<()> {
+    let saved = account::Config::load()?;
     let cwd = args
         .cwd
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
@@ -133,7 +192,6 @@ async fn main() -> Result<()> {
     let (router, token) = http::router(manager.clone(), args.token);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
-
     let scheme = if args.tls { "wss" } else { "ws" };
 
     println!("\n  Synapse server is running.\n");
@@ -152,10 +210,6 @@ async fn main() -> Result<()> {
     }
     println!("\n  Connect your App to: {scheme}://{addr}/?token={token}\n");
 
-    // Build a scannable pairing URL for the QR code.
-    // --tunnel: expose over the public internet via Cloudflare (real TLS,
-    //   wss://, reachable from any phone anywhere). This is the productized
-    //   remote path; the LAN IP path below remains for local use.
     let (pair_host, pair_port, pair_tls) = if args.tunnel {
         println!("  Starting Cloudflare Tunnel (public wss access)…");
         let local_url = format!("http://localhost:{}", args.port);
@@ -181,58 +235,81 @@ async fn main() -> Result<()> {
         )
     };
     let pair_url = format!("synapse://{pair_host}:{pair_port}?token={token}&tls={pair_tls}");
-    println!("  Pairing URL:    {pair_url}");
-    println!("  Scan this QR with the app to bind this device:\n");
+    println!("  Pairing URL (LAN): {pair_url}");
+    println!("  Scan this QR for direct LAN pairing:\n");
     match qr2term::print_qr(&pair_url) {
         Ok(_) => println!(),
         Err(e) => tracing::warn!("could not render pairing QR: {e}"),
     }
 
-    // If a relay is configured, start the outbound uplink bridge in the
-    // background. The server dials the relay, then pipes frames between the
-    // relay socket and its own local WS endpoint so the relay is transparent.
-    // This runs concurrently with the local listener below.
-    if let Some(relay_url) = args.relay.clone() {
-        let device_id = args
-            .relay_device_id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()[..8].to_string());
-        let relay_token = args.relay_token.clone().unwrap_or_else(|| token.clone());
+    if let Some(cfg) = &saved {
+        println!("  Account:        {} ({})", cfg.user_email, cfg.device_name);
+        println!("  Relay device:   {}", cfg.device_id);
+        if let Ok(code) = account::create_pairing_code(cfg).await {
+            println!("  Pairing code:   {}  (enter in app, expires in {}s)", code.code, code.expires_in);
+        }
+        println!("  Or sign in on the app with the same account to see this device in your list.\n");
+    }
+
+    let relay_url = args
+        .relay
+        .clone()
+        .or_else(|| saved.as_ref().map(|c| c.uplink_url()));
+    if let Some(relay_url) = relay_url {
+        let (device_id, relay_token, connect_host) = if let Some(cfg) = &saved {
+            if args.relay_device_id.is_none() && args.relay.is_none() {
+                (
+                    cfg.device_id.clone(),
+                    cfg.device_token.clone(),
+                    cfg.relay_host.clone(),
+                )
+            } else {
+                (
+                    args.relay_device_id.clone().unwrap_or_else(|| {
+                        uuid::Uuid::new_v4().to_string()[..8].to_string()
+                    }),
+                    args.relay_token.clone().unwrap_or_else(|| token.clone()),
+                    relay_url
+                        .replace("wss://", "")
+                        .replace("ws://", "")
+                        .replace("/uplink", "")
+                        .replace("/connect", ""),
+                )
+            }
+        } else {
+            (
+                args.relay_device_id.clone().unwrap_or_else(|| {
+                    uuid::Uuid::new_v4().to_string()[..8].to_string()
+                }),
+                args.relay_token.clone().unwrap_or_else(|| token.clone()),
+                relay_url
+                    .replace("wss://", "")
+                    .replace("ws://", "")
+                    .replace("/uplink", "")
+                    .replace("/connect", ""),
+            )
+        };
         let local_ws = format!(
-            "{}://localhost:{}/?token={token}",
+            "{}://127.0.0.1:{}/?token={token}",
             if args.tls { "wss" } else { "ws" },
             args.port
         );
-        let scheme = if args.tls { "wss" } else { "ws" };
-        // Build the uplink URL the app will ultimately use to reach us.
-        let connect_host = relay_url
-            .replace("wss://", "")
-            .replace("ws://", "")
-            .replace("/uplink", "")
-            .replace("/connect", "");
         let app_connect = format!(
             "synapse://{connect_host}/connect?deviceId={device_id}&token={relay_token}&tls=1"
         );
         println!("  Relay uplink:   {relay_url} (deviceId={device_id})");
-        println!("  Relay pair URL: {app_connect}");
-        println!("  Scan this QR with the app to bind this device over the relay:\n");
-        match qr2term::print_qr(&app_connect) {
-            Ok(_) => println!(),
-            Err(e) => tracing::warn!("could not render relay pairing QR: {e}"),
-        }
-        let _ = scheme;
+        println!("  Relay pair URL: {app_connect}\n");
+        let relay_url = relay_url.clone();
+        let device_id = device_id.clone();
+        let relay_token = relay_token.clone();
+        let local_ws = local_ws.clone();
         tokio::spawn(async move {
             relay::run_bridge(&relay_url, &device_id, &relay_token, &local_ws).await;
         });
     }
 
-    // Mirror sessions driven outside Synapse (native Claude Code in a terminal)
-    // to every client by tailing their transcripts live.
     tail::spawn(manager.clone());
 
-    // Attach to existing Claude Code sessions in the background so a slow or
-    // hanging `claude agents` never blocks the listener. New sessions can
-    // always be created from the app regardless.
     tokio::spawn(async move {
         match manager.sync_managed().await {
             n if n > 0 => println!("  Attached {n} existing Claude Code session(s)."),
@@ -279,9 +356,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Best-effort detection of this machine's LAN IPv4 address for the pairing QR.
-/// Resolves by opening a UDP "connection" to a public address (no packets sent)
-/// and reading the local socket address. Falls back to 127.0.0.1.
 fn detect_lan_ip() -> String {
     use std::net::UdpSocket;
     let candidates = ["8.8.8.8:80", "114.114.114.114:80", "1.1.1.1:80"];

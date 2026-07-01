@@ -27,6 +27,8 @@ pub struct ParsedPair {
     /// URL path for relay connections (e.g. "/connect"). Empty for direct
     /// server connections (which use "/").
     pub path: String,
+    /// Relay device id (required for /connect).
+    pub device_id: String,
 }
 
 /// Commands the UI sends to the background network thread.
@@ -39,6 +41,7 @@ pub enum NetCmd {
         token: String,
         tls: bool,
         path: String,
+        device_id: String,
     },
     /// Send a raw JSON text frame over the active connection. Silently
     /// dropped if there is no active connection.
@@ -93,6 +96,7 @@ async fn net_main(weak: Weak<App>, rx: Receiver<NetCmd>) {
                 token,
                 tls,
                 path,
+                device_id,
             } => {
                 // Abort the previous connection task and start fresh.
                 if let Some(t) = active_task.take() {
@@ -100,7 +104,7 @@ async fn net_main(weak: Weak<App>, rx: Receiver<NetCmd>) {
                 }
                 let (send_tx, send_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
                 active_send = Some(send_tx);
-                let url = build_url(&host, &port, &token, tls, &path);
+                let url = build_url(&host, &port, &token, tls, &path, &device_id);
                 let weak = weak.clone();
                 active_task = Some(tokio::spawn(async move {
                     run_connection(&url, tls, &weak, send_rx).await;
@@ -116,12 +120,14 @@ async fn net_main(weak: Weak<App>, rx: Receiver<NetCmd>) {
     // Channel closed (UI thread gone) — let the runtime drop.
 }
 
-fn build_url(host: &str, port: &str, token: &str, tls: bool, path: &str) -> String {
+fn build_url(host: &str, port: &str, token: &str, tls: bool, path: &str, device_id: &str) -> String {
     let scheme = if tls { "wss" } else { "ws" };
     if path.is_empty() {
         format!("{scheme}://{host}:{port}/?token={token}")
-    } else {
+    } else if device_id.is_empty() {
         format!("{scheme}://{host}:{port}{path}?token={token}")
+    } else {
+        format!("{scheme}://{host}:{port}{path}?deviceId={device_id}&token={token}")
     }
 }
 
@@ -400,6 +406,7 @@ pub fn parse_pair_link(link: &str) -> Option<ParsedPair> {
             token,
             tls,
             path: path.to_string(),
+            device_id,
         });
     }
 
@@ -408,13 +415,13 @@ pub fn parse_pair_link(link: &str) -> Option<ParsedPair> {
     if host.is_empty() {
         return None;
     }
-    let _ = device_id; // only used for relay path detection above
     Some(ParsedPair {
         host,
         port,
         token,
         tls,
         path: String::new(),
+        device_id,
     })
 }
 

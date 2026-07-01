@@ -3,14 +3,70 @@
 
 slint::include_modules!();
 
+mod account;
 mod net;
 pub mod web;
 
+use account::{AccountClient, AppConfig, ConnectResp, DeviceListItem};
 use net::{NetCmd, NetHandle};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 fn model_rc<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
+}
+
+fn devices_model(devices: &[DeviceListItem]) -> ModelRc<DeviceInfo> {
+    model_rc(
+        devices
+            .iter()
+            .map(|d| DeviceInfo {
+                id: d.id.clone().into(),
+                name: d.name.clone().into(),
+                online: d.online,
+            })
+            .collect(),
+    )
+}
+
+fn connect_relay(net: &NetHandle, resp: &ConnectResp) {
+    net.send(NetCmd::Connect {
+        host: resp.relay_host.clone(),
+        port: resp.relay_port.to_string(),
+        token: resp.connect_token.clone(),
+        tls: resp.relay_tls,
+        path: "/connect".to_string(),
+        device_id: resp.device_id.clone(),
+    });
+}
+
+fn spawn_account_task(_weak: slint::Weak<App>, fut: impl std::future::Future<Output = ()> + Send + 'static) {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("account runtime");
+        rt.block_on(fut);
+    });
+}
+
+fn refresh_devices_ui(weak: &slint::Weak<App>, cfg: AppConfig) {
+    let weak = weak.clone();
+    spawn_account_task(weak.clone(), async move {
+        let client = AccountClient::from_config(cfg);
+        let result = client.list_devices().await;
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = weak.upgrade() {
+                app.set_loadingDevices(false);
+                match result {
+                    Ok(devs) => {
+                        app.set_accountDevices(devices_model(&devs));
+                        app.set_pairingError("".into());
+                    }
+                    Err(e) => app.set_pairingError(format!("Could not load devices: {e}").into()),
+                }
+            }
+        });
+    });
 }
 
 // Per-turn streaming scratch held on the UI thread. The net thread delivers
@@ -185,7 +241,172 @@ pub fn run_app() -> anyhow::Result<()> {
     // event loop and pushes commands through this handle.
     let net: NetHandle = net::spawn_net_thread(app.as_weak());
 
-    // --- pair via QR / link ---
+    if let Ok(Some(cfg)) = AppConfig::load() {
+        app.set_userEmail(cfg.user_email.clone().into());
+        app.set_relayUrl(cfg.relay_api.clone().into());
+        app.set_pairingSubView("devices".into());
+        app.set_loadingDevices(true);
+        refresh_devices_ui(&app.as_weak(), cfg);
+    }
+
+    // --- account: sign in / register ---
+    {
+        let weak = app.as_weak();
+        app.on_authToggleMode(move || {
+            if let Some(app) = weak.upgrade() {
+                app.set_isRegister(!app.get_isRegister());
+                app.set_pairingError("".into());
+            }
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_authSubmit(move || {
+            let app = match weak.upgrade() {
+                Some(a) => a,
+                None => return,
+            };
+            let relay = app.get_relayUrl().to_string();
+            let email = app.get_authEmail().to_string();
+            let password = app.get_authPassword().to_string();
+            let name = app.get_authName().to_string();
+            let register = app.get_isRegister();
+            app.set_connecting(true);
+            app.set_pairingError("".into());
+            let weak = weak.clone();
+            spawn_account_task(weak.clone(), async move {
+                let result = if register {
+                    AccountClient::register(&relay, &email, &password, &name).await
+                } else {
+                    AccountClient::login(&relay, &email, &password).await
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.set_connecting(false);
+                        match result {
+                            Ok(client) => {
+                                if let Err(e) = client.cfg.save() {
+                                    app.set_pairingError(format!("Save failed: {e}").into());
+                                    return;
+                                }
+                                app.set_userEmail(client.cfg.user_email.clone().into());
+                                app.set_pairingSubView("devices".into());
+                                app.set_authPassword("".into());
+                                app.set_loadingDevices(true);
+                                refresh_devices_ui(&weak, client.cfg);
+                            }
+                            Err(e) => {
+                                app.set_pairingError(format!("{e}").into());
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_refreshDevices(move || {
+            let Ok(Some(cfg)) = AppConfig::load() else {
+                if let Some(app) = weak.upgrade() {
+                    app.set_pairingError("Not signed in.".into());
+                }
+                return;
+            };
+            if let Some(app) = weak.upgrade() {
+                app.set_loadingDevices(true);
+                app.set_pairingError("".into());
+            }
+            refresh_devices_ui(&weak, cfg);
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let net = net.clone();
+        app.on_selectDevice(move |device_id| {
+            let device_id = device_id.to_string();
+            let Ok(Some(cfg)) = AppConfig::load() else {
+                if let Some(app) = weak.upgrade() {
+                    app.set_pairingError("Not signed in.".into());
+                }
+                return;
+            };
+            if let Some(app) = weak.upgrade() {
+                app.set_connecting(true);
+                app.set_pairingError("".into());
+            }
+            let net = net.clone();
+            let weak = weak.clone();
+            spawn_account_task(weak.clone(), async move {
+                let client = AccountClient::from_config(cfg);
+                let result = client.connect_device(&device_id).await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.set_connecting(false);
+                        match result {
+                            Ok(resp) => connect_relay(&net, &resp),
+                            Err(e) => app.set_pairingError(format!("Connect failed: {e}").into()),
+                        }
+                    }
+                });
+            });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        let net = net.clone();
+        app.on_claimPairingCode(move || {
+            let Ok(Some(cfg)) = AppConfig::load() else {
+                if let Some(app) = weak.upgrade() {
+                    app.set_pairingError("Not signed in.".into());
+                }
+                return;
+            };
+            let code = weak
+                .upgrade()
+                .map(|a| a.get_pairingCode().to_string())
+                .unwrap_or_default();
+            if code.trim().is_empty() {
+                if let Some(app) = weak.upgrade() {
+                    app.set_pairingError("Enter the 6-digit pairing code.".into());
+                }
+                return;
+            }
+            if let Some(app) = weak.upgrade() {
+                app.set_connecting(true);
+                app.set_pairingError("".into());
+            }
+            let net = net.clone();
+            let weak = weak.clone();
+            spawn_account_task(weak.clone(), async move {
+                let client = AccountClient::from_config(cfg);
+                let result = client.claim_pairing_code(code.trim()).await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.set_connecting(false);
+                        match result {
+                            Ok(resp) => connect_relay(&net, &resp),
+                            Err(e) => app.set_pairingError(format!("Invalid code: {e}").into()),
+                        }
+                    }
+                });
+            });
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_signOut(move || {
+            let _ = AppConfig::clear();
+            if let Some(app) = weak.upgrade() {
+                app.set_pairingSubView("auth".into());
+                app.set_userEmail("".into());
+                app.set_accountDevices(model_rc(vec![]));
+                app.set_pairingError("".into());
+            }
+        });
+    }
+
+    // --- pair via QR / link (advanced) ---
     // Parses a synapse://host:port?token=T&tls=N link, fills the pairing
     // fields, and connects — the path taken after scanning the server's QR.
     {
@@ -222,6 +443,7 @@ pub fn run_app() -> anyhow::Result<()> {
                     token: raw.clone(),
                     tls,
                     path: String::new(),
+                    device_id: String::new(),
                 })
             });
             let parsed = match parsed {
@@ -252,6 +474,7 @@ pub fn run_app() -> anyhow::Result<()> {
                 token: parsed.token,
                 tls: parsed.tls,
                 path: parsed.path,
+                device_id: parsed.device_id,
             });
         });
     }
@@ -274,6 +497,7 @@ pub fn run_app() -> anyhow::Result<()> {
                 token,
                 tls,
                 path: String::new(),
+                device_id: String::new(),
             });
         });
     }
@@ -598,6 +822,7 @@ pub fn run_app() -> anyhow::Result<()> {
                 token,
                 tls,
                 path: String::new(),
+                device_id: String::new(),
             });
         }
         _ => {
@@ -1952,6 +2177,7 @@ mod pair_tests {
         assert_eq!(p.token, "xyz");
         assert!(p.tls);
         assert_eq!(p.path, "/connect");
+        assert_eq!(p.device_id, "abc123");
     }
 
     #[test]
