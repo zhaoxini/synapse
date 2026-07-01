@@ -85,6 +85,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/synapse-relay${{ matrix.ext }}" "${STAGE}/bin/"
           cp scripts/SERVER-README.md "${STAGE}/README.md"
           cp scripts/install-server.sh "${STAGE}/install.sh"
+          cp scripts/install.sh "${STAGE}/install-remote.sh"
           echo "${VERSION}" > "${STAGE}/VERSION"
           tar -czf "${STAGE}.tar.gz" "${STAGE}"
           ls -lh "${STAGE}.tar.gz"
@@ -100,6 +101,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/synapse-relay.exe" "$stage/bin/"
           Copy-Item scripts/SERVER-README.md "$stage/README.md"
           Copy-Item scripts/install-server.sh "$stage/install.sh"
+          Copy-Item scripts/install.sh "$stage/install-remote.sh"
           Set-Content "$stage/VERSION" $version
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
           Get-Item "$stage.zip"
@@ -125,6 +127,11 @@ jobs:
 
       - name: List artifacts
         run: find dist -type f | sort
+
+      - name: Attach install script
+        run: |
+          cp scripts/install.sh dist/install.sh
+          chmod +x dist/install.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

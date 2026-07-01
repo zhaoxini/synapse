@@ -5,14 +5,34 @@ Your phone connects through the Synapse cloud relay — no port forwarding or ma
 
 ## Quick start
 
+### One-line install (macOS / Linux)
+
 ```sh
-# macOS / Linux
-chmod +x bin/synapse-server
-./bin/synapse-server
+curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install.sh | bash
 ```
 
-First run asks for **email** and **password** (creates an account if needed).  
-Then it prints a **6-digit pairing code** — enter it in the Synapse mobile app, or sign in with the same account and tap your computer.
+### Homebrew (macOS / Linuxbrew)
+
+```sh
+brew tap zhaoxini/synapse https://github.com/zhaoxini/synapse
+brew install synapse-server
+```
+
+### Manual download
+
+Download a release archive from [GitHub Releases](https://github.com/zhaoxini/synapse/releases), then:
+
+```sh
+tar xzf synapse-*-x86_64-unknown-linux-gnu.tar.gz
+cd synapse-*-x86_64-unknown-linux-gnu
+sudo ./install.sh
+```
+
+### Run
+
+```sh
+synapse-server
+```
 
 ## Requirements
 

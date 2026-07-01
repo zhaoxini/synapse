@@ -19,18 +19,19 @@ Each archive contains:
 | `synapse-*-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon |
 | `synapse-*-x86_64-pc-windows-msvc.zip` | Windows x64 |
 
-### User flow
+First run asks for **email** and **password** (creates an account if needed).  
+Then it prints a **6-digit pairing code** — enter it in the Synapse mobile app, or sign in with the same account and tap your computer.
 
-1. Download the archive for your platform
-2. Run `./bin/synapse-server`
-3. Sign in with email + password
-4. Open Synapse app on phone → same account → tap your computer
-
-### Install script
+## Quick start
 
 ```sh
-tar xzf synapse-*-x86_64-unknown-linux-gnu.tar.gz
-cd synapse-*-x86_64-unknown-linux-gnu
-sudo ./install.sh
+# One-line install
+curl -fsSL https://raw.githubusercontent.com/zhaoxini/synapse/master/scripts/install.sh | bash
+
+# Or Homebrew
+brew tap zhaoxini/synapse https://github.com/zhaoxini/synapse
+brew install synapse-server
+
+# Then run
 synapse-server
 ```
