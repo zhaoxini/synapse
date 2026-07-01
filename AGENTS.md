@@ -26,6 +26,10 @@ Server-only changes (`crates/server/**`) don't need an app rebuild — rebuild +
 
 Always verify on the real surface (the sim app), not just a browser tab.
 
+## Web UI design system
+
+Before changing layout, spacing, or components under `crates/app/web/`, read **`crates/app/web/DESIGN.md`** — tokens, component structure (topbar, tree, composer, sheets), iOS touch-target rules, and Konsta/HIG references.
+
 ## Cursor Cloud specific instructions
 
 This is a **Linux** dev VM. Standard build/lint/test/run commands live in `README.md` and `.github/workflows/ci.yml` — use those. Notes specific to this environment:
