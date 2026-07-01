@@ -98,8 +98,6 @@ struct AuthBody<'a> {
 #[allow(dead_code)]
 struct AuthResp {
     session_token: String,
-    #[serde(default)]
-    email_verified: bool,
     user: UserResp,
     relay_host: String,
     relay_port: u16,
@@ -136,9 +134,35 @@ pub async fn register_account(
     name: &str,
     device_name: &str,
 ) -> Result<Config> {
-    let auth = authenticate(relay, email, password, name, true).await?;
-    ensure_email_verified(&auth.api, &auth.session_token, auth.email_verified, email).await?;
-    finish_device_registration(&auth, device_name, email).await
+    let (api, ws, host, port, tls) = relay_urls(relay)?;
+    let client = reqwest::Client::new();
+    let auth: AuthResp = client
+        .post(format!("{api}/api/v1/auth/register"))
+        .json(&AuthBody {
+            email,
+            password,
+            name,
+        })
+        .send()
+        .await
+        .context("register request")?
+        .error_for_status()
+        .context("register failed")?
+        .json()
+        .await
+        .context("register response")?;
+    register_device(
+        &client,
+        &api,
+        &auth.session_token,
+        device_name,
+        ws,
+        host,
+        port,
+        tls,
+        email,
+    )
+    .await
 }
 
 pub async fn login_account(
@@ -147,116 +171,32 @@ pub async fn login_account(
     password: &str,
     device_name: &str,
 ) -> Result<Config> {
-    let auth = authenticate(relay, email, password, "", false).await?;
-    ensure_email_verified(&auth.api, &auth.session_token, auth.email_verified, email).await?;
-    finish_device_registration(&auth, device_name, email).await
-}
-
-struct AuthSession {
-    api: String,
-    ws: String,
-    host: String,
-    port: u16,
-    tls: bool,
-    session_token: String,
-    email_verified: bool,
-}
-
-async fn authenticate(
-    relay: &str,
-    email: &str,
-    password: &str,
-    name: &str,
-    register: bool,
-) -> Result<AuthSession> {
     let (api, ws, host, port, tls) = relay_urls(relay)?;
     let client = reqwest::Client::new();
-    let path = if register {
-        "register"
-    } else {
-        "login"
-    };
     let auth: AuthResp = client
-        .post(format!("{api}/api/v1/auth/{path}"))
+        .post(format!("{api}/api/v1/auth/login"))
         .json(&AuthBody {
             email,
             password,
-            name,
+            name: "",
         })
         .send()
         .await
-        .context(format!("{path} request"))?
+        .context("login request")?
         .error_for_status()
-        .context(format!("{path} failed"))?
+        .context("login failed")?
         .json()
         .await
-        .context(format!("{path} response"))?;
-    Ok(AuthSession {
-        api,
+        .context("login response")?;
+    register_device(
+        &client,
+        &api,
+        &auth.session_token,
+        device_name,
         ws,
         host,
         port,
         tls,
-        session_token: auth.session_token,
-        email_verified: auth.email_verified,
-    })
-}
-
-async fn ensure_email_verified(
-    api: &str,
-    session_token: &str,
-    already_verified: bool,
-    email: &str,
-) -> Result<()> {
-    if already_verified {
-        return Ok(());
-    }
-    println!("\n  Verification code sent to {email}");
-    println!("  (check your inbox — or relay logs if SMTP is not configured)\n");
-    let client = reqwest::Client::new();
-    for attempt in 1..=5 {
-        let code = read_line("Verification code: ")?;
-        if code.is_empty() {
-            continue;
-        }
-        let resp = client
-            .post(format!("{api}/api/v1/auth/verify-email"))
-            .header("Authorization", format!("Bearer {session_token}"))
-            .json(&serde_json::json!({ "code": code }))
-            .send()
-            .await
-            .context("verify-email request")?;
-        if resp.status().is_success() {
-            println!("  Email verified.\n");
-            return Ok(());
-        }
-        if attempt < 5 {
-            println!("  Invalid code — try again, or check spam.\n");
-            let _ = client
-                .post(format!("{api}/api/v1/auth/resend-verification"))
-                .header("Authorization", format!("Bearer {session_token}"))
-                .send()
-                .await;
-        }
-    }
-    bail!("email verification failed — check your inbox and run synapse-server again")
-}
-
-async fn finish_device_registration(
-    auth: &AuthSession,
-    device_name: &str,
-    email: &str,
-) -> Result<Config> {
-    let client = reqwest::Client::new();
-    register_device(
-        &client,
-        &auth.api,
-        &auth.session_token,
-        device_name,
-        auth.ws.clone(),
-        auth.host.clone(),
-        auth.port,
-        auth.tls,
         email,
     )
     .await
@@ -366,8 +306,8 @@ pub fn print_status(cfg: &Config) {
     println!();
 }
 
-/// First-run interactive setup: email + password only. Relay comes from
-/// `SYNAPSE_RELAY` or a one-time prompt. Tries login first, then register.
+/// First-run interactive setup: email + password. Accounts are created by the
+/// relay admin — this only signs in with credentials you were given.
 pub async fn interactive_setup() -> Result<Config> {
     println!("\n  Welcome to Synapse — first-time setup\n");
     let relay = match default_relay_url() {
@@ -395,17 +335,10 @@ pub async fn interactive_setup() -> Result<Config> {
             cfg.save()?;
             Ok(cfg)
         }
-        Err(login_err) => {
-            tracing::debug!("login failed: {login_err}; trying register");
-            match register_account(&relay, &email, &password, "", &device_name).await {
-                Ok(cfg) => {
-                    cfg.save()?;
-                    Ok(cfg)
-                }
-                Err(reg_err) => {
-                    bail!("sign-in failed ({login_err}). Could not create account either ({reg_err}).");
-                }
-            }
+        Err(e) => {
+            bail!(
+                "sign-in failed ({e}). Ask the relay admin for an account if you don't have one yet."
+            );
         }
     }
 }

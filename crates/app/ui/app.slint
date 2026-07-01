@@ -85,10 +85,6 @@ export component App inherits Window {
     in-out property <string> relayUrl: "https://zx0623.duckdns.org";
     in-out property <string> authEmail: "";
     in-out property <string> authPassword: "";
-    in-out property <string> authName: "";
-    in-out property <string> authVerifyCode: "";
-    in-out property <string> authResetCode: "";
-    in-out property <bool> isRegister: false;
     in-out property <string> userEmail: "";
     in-out property <[DeviceInfo]> accountDevices: [];
     in-out property <string> pairingCode: "";
@@ -131,12 +127,6 @@ export component App inherits Window {
     in-out property <length> keyboardInset: 0px;
 
     callback authSubmit();
-    callback authToggleMode();
-    callback authVerifySubmit();
-    callback authResendVerification();
-    callback authForgotPassword();
-    callback authResetSubmit();
-    callback authGoogleSignIn();
     callback refreshDevices();
     callback selectDevice(string);
     callback claimPairingCode();
@@ -182,8 +172,12 @@ export component App inherits Window {
             if root.pairingSubView == "auth" : VerticalLayout {
                 spacing: 12px;
                 Text {
-                    text: root.isRegister ? "Create your Synapse account" : "Sign in to your account";
+                    text: "Sign in with your account";
                     font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
+                }
+                Text {
+                    text: "Accounts are created by the relay admin.";
+                    font-size: 12px; color: Theme.textFaint; horizontal-alignment: center; wrap: word-wrap;
                 }
                 authFieldRect {
                     placeholder: "https://zx0623.duckdns.org";
@@ -200,125 +194,14 @@ export component App inherits Window {
                     value: root.authPassword;
                     edited => { root.authPassword = self.value; }
                 }
-                if root.isRegister : authFieldRect {
-                    placeholder: "Your name";
-                    value: root.authName;
-                    edited => { root.authName = self.value; }
-                }
                 Rectangle {
                     height: 52px;
                     border-radius: Theme.radiusSm;
                     background: root.connecting ? Theme.accentDim : Theme.accent;
                     TouchArea { clicked => { root.authSubmit(); } }
                     Text {
-                        text: root.connecting ? "Please wait…" : (root.isRegister ? "Create account" : "Sign in");
+                        text: root.connecting ? "Please wait…" : "Sign in";
                         color: #ffffff; font-weight: 700; font-size: 16px;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: 40px;
-                    TouchArea { clicked => { root.authToggleMode(); } }
-                    Text {
-                        text: root.isRegister ? "Already have an account? Sign in" : "New here? Create an account";
-                        color: Theme.blue; font-size: 13px; font-weight: 600;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: 36px;
-                    TouchArea { clicked => { root.authForgotPassword(); } }
-                    Text {
-                        text: "Forgot password?";
-                        color: Theme.textDim; font-size: 13px;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: 44px;
-                    border-radius: Theme.radiusSm;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    background: Theme.bgElev;
-                    TouchArea { clicked => { root.authGoogleSignIn(); } }
-                    Text {
-                        text: "Continue with Google";
-                        color: Theme.text; font-size: 14px; font-weight: 600;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-            }
-
-            if root.pairingSubView == "verify" : VerticalLayout {
-                spacing: 12px;
-                Text {
-                    text: "Verify your email";
-                    font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
-                }
-                Text {
-                    text: "We sent a 6-digit code to " + root.userEmail;
-                    font-size: 13px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
-                }
-                authFieldRect {
-                    placeholder: "Verification code";
-                    value: root.authVerifyCode;
-                    edited => { root.authVerifyCode = self.value; }
-                }
-                Rectangle {
-                    height: 52px;
-                    border-radius: Theme.radiusSm;
-                    background: root.connecting ? Theme.accentDim : Theme.accent;
-                    TouchArea { clicked => { root.authVerifySubmit(); } }
-                    Text {
-                        text: root.connecting ? "Please wait…" : "Verify email";
-                        color: #ffffff; font-weight: 700; font-size: 16px;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: 40px;
-                    TouchArea { clicked => { root.authResendVerification(); } }
-                    Text {
-                        text: "Resend code";
-                        color: Theme.blue; font-size: 13px; font-weight: 600;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-            }
-
-            if root.pairingSubView == "reset" : VerticalLayout {
-                spacing: 12px;
-                Text {
-                    text: "Reset your password";
-                    font-size: 14px; color: Theme.textDim; horizontal-alignment: center; wrap: word-wrap;
-                }
-                authFieldRect {
-                    placeholder: "Reset code from email";
-                    value: root.authResetCode;
-                    edited => { root.authResetCode = self.value; }
-                }
-                authFieldRect {
-                    placeholder: "New password";
-                    value: root.authPassword;
-                    edited => { root.authPassword = self.value; }
-                }
-                Rectangle {
-                    height: 52px;
-                    border-radius: Theme.radiusSm;
-                    background: root.connecting ? Theme.accentDim : Theme.accent;
-                    TouchArea { clicked => { root.authResetSubmit(); } }
-                    Text {
-                        text: root.connecting ? "Please wait…" : "Set new password";
-                        color: #ffffff; font-weight: 700; font-size: 16px;
-                        horizontal-alignment: center; vertical-alignment: center;
-                    }
-                }
-                Rectangle {
-                    height: 36px;
-                    TouchArea { clicked => { root.pairingSubView = "auth"; root.pairingError = ""; } }
-                    Text {
-                        text: "Back to sign in";
-                        color: Theme.blue; font-size: 13px; font-weight: 600;
                         horizontal-alignment: center; vertical-alignment: center;
                     }
                 }

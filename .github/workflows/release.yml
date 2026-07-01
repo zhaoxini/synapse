@@ -84,7 +84,6 @@ jobs:
           cp "target/${{ matrix.target }}/release/synapse-server${{ matrix.ext }}" "${STAGE}/bin/"
           cp "target/${{ matrix.target }}/release/synapse-relay${{ matrix.ext }}" "${STAGE}/bin/"
           cp scripts/SERVER-README.md "${STAGE}/README.md"
-          cp scripts/SSO-README.md "${STAGE}/SSO-README.md"
           cp scripts/install-server.sh "${STAGE}/install.sh"
           cp scripts/synapse-server-wrapper.sh "${STAGE}/synapse-server-wrapper.sh"
           cp scripts/install.sh "${STAGE}/install-remote.sh"

@@ -5,12 +5,11 @@
 // The relay stores users/devices in SQLite, exposes a REST API for login and
 // device discovery, and shuttles WS frames transparently.
 
+mod admin;
 mod api;
 mod auth;
 mod db;
-mod email;
 mod registry;
-mod sso;
 
 use anyhow::{Context, Result};
 use axum::{
@@ -21,14 +20,12 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use db::Db;
-use email::EmailConfig;
 use futures_util::{SinkExt, StreamExt};
 use registry::Registry;
 use serde::Deserialize;
 use serde_json::json;
-use sso::OAuthConfig;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
@@ -38,7 +35,26 @@ use tokio::sync::mpsc;
     version,
     about = "Synapse relay: accounts, device registry, and WebSocket bridge"
 )]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+    #[command(flatten)]
+    serve: ServeArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Manage user accounts (admin)
+    User {
+        #[command(subcommand)]
+        command: admin::UserCmd,
+        #[arg(long, default_value = "synapse-relay.db")]
+        db: PathBuf,
+    },
+}
+
+#[derive(Parser, Debug)]
+struct ServeArgs {
     #[arg(short, long, default_value = "443")]
     port: u16,
     #[arg(long, default_value = "0.0.0.0")]
@@ -59,8 +75,6 @@ struct Args {
     /// SQLite database path.
     #[arg(long, default_value = "synapse-relay.db")]
     db: PathBuf,
-    #[arg(long)]
-    dev: bool,
 }
 
 #[derive(Clone)]
@@ -70,9 +84,6 @@ pub struct AppState {
     pub public_host: String,
     pub public_port: u16,
     pub tls: bool,
-    pub email: Option<EmailConfig>,
-    pub oauth: Option<OAuthConfig>,
-    pub dev: bool,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +104,14 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
+    if let Some(Commands::User { command, db }) = cli.command {
+        return admin::run(command, &db);
+    }
+    run_server(cli.serve).await
+}
+
+async fn run_server(args: ServeArgs) -> Result<()> {
     let db = Arc::new(Db::open(&args.db)?);
     let registry = Arc::new(Registry::new());
     let tls = args.tls_cert.is_some();
@@ -110,9 +128,6 @@ async fn main() -> Result<()> {
         public_host: public_host.clone(),
         public_port,
         tls: public_tls,
-        email: EmailConfig::from_env(),
-        oauth: OAuthConfig::from_env(&public_host, public_tls),
-        dev: args.dev,
     };
 
     let app = api::router()

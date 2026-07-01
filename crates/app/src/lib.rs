@@ -11,45 +11,6 @@ use account::{AccountClient, AppConfig, ConnectResp, DeviceListItem};
 use net::{NetCmd, NetHandle};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-fn open_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
-}
-
-fn enter_account_session(weak: &slint::Weak<App>, client: AccountClient) {
-    let _ = slint::invoke_from_event_loop({
-        let weak = weak.clone();
-        move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_connecting(false);
-                if let Err(e) = client.cfg.save() {
-                    app.set_pairingError(format!("Save failed: {e}").into());
-                    return;
-                }
-                app.set_userEmail(client.cfg.user_email.clone().into());
-                app.set_authPassword("".into());
-                app.set_authVerifyCode("".into());
-                if client.cfg.email_verified {
-                    app.set_pairingSubView("devices".into());
-                    app.set_loadingDevices(true);
-                    refresh_devices_ui(&weak, client.cfg);
-                } else {
-                    app.set_pairingSubView("verify".into());
-                    app.set_pairingError(
-                        "Check your inbox for a verification code.".into(),
-                    );
-                }
-            }
-        }
-    });
-}
-
 fn model_rc<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(v))
 }
@@ -286,25 +247,12 @@ pub fn run_app() -> anyhow::Result<()> {
     if let Ok(Some(cfg)) = AppConfig::load() {
         app.set_userEmail(cfg.user_email.clone().into());
         app.set_relayUrl(cfg.relay_api.clone().into());
-        if cfg.email_verified {
-            app.set_pairingSubView("devices".into());
-            app.set_loadingDevices(true);
-            refresh_devices_ui(&app.as_weak(), cfg);
-        } else {
-            app.set_pairingSubView("verify".into());
-        }
+        app.set_pairingSubView("devices".into());
+        app.set_loadingDevices(true);
+        refresh_devices_ui(&app.as_weak(), cfg);
     }
 
-    // --- account: sign in / register ---
-    {
-        let weak = app.as_weak();
-        app.on_authToggleMode(move || {
-            if let Some(app) = weak.upgrade() {
-                app.set_isRegister(!app.get_isRegister());
-                app.set_pairingError("".into());
-            }
-        });
-    }
+    // --- account: sign in (admin-created accounts) ---
     {
         let weak = app.as_weak();
         app.on_authSubmit(move || {
@@ -315,195 +263,33 @@ pub fn run_app() -> anyhow::Result<()> {
             let relay = app.get_relayUrl().to_string();
             let email = app.get_authEmail().to_string();
             let password = app.get_authPassword().to_string();
-            let name = app.get_authName().to_string();
-            let register = app.get_isRegister();
             app.set_connecting(true);
             app.set_pairingError("".into());
             let weak = weak.clone();
             spawn_account_task(weak.clone(), async move {
-                let result = if register {
-                    AccountClient::register(&relay, &email, &password, &name).await
-                } else {
-                    AccountClient::login(&relay, &email, &password).await
-                };
-                match result {
-                    Ok(client) => enter_account_session(&weak, client),
-                    Err(e) => {
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(app) = weak.upgrade() {
-                                app.set_connecting(false);
-                                app.set_pairingError(format!("{e}").into());
-                            }
-                        });
-                    }
-                }
-            });
-        });
-    }
-    {
-        let weak = app.as_weak();
-        app.on_authVerifySubmit(move || {
-            let Ok(Some(cfg)) = AppConfig::load() else {
-                if let Some(app) = weak.upgrade() {
-                    app.set_pairingError("Not signed in.".into());
-                }
-                return;
-            };
-            let code = weak
-                .upgrade()
-                .map(|a| a.get_authVerifyCode().to_string())
-                .unwrap_or_default();
-            if code.trim().is_empty() {
-                if let Some(app) = weak.upgrade() {
-                    app.set_pairingError("Enter the verification code.".into());
-                }
-                return;
-            }
-            if let Some(app) = weak.upgrade() {
-                app.set_connecting(true);
-                app.set_pairingError("".into());
-            }
-            let weak = weak.clone();
-            spawn_account_task(weak.clone(), async move {
-                let client = AccountClient::from_config(cfg);
-                let result = client.verify_email(&code).await;
+                let result = AccountClient::login(&relay, &email, &password).await;
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(app) = weak.upgrade() {
                         app.set_connecting(false);
                         match result {
-                            Ok(()) => {
-                                let mut cfg = client.cfg.clone();
-                                cfg.email_verified = true;
-                                if let Err(e) = cfg.save() {
+                            Ok(client) => {
+                                if let Err(e) = client.cfg.save() {
                                     app.set_pairingError(format!("Save failed: {e}").into());
                                     return;
                                 }
+                                app.set_userEmail(client.cfg.user_email.clone().into());
                                 app.set_pairingSubView("devices".into());
+                                app.set_authPassword("".into());
                                 app.set_loadingDevices(true);
-                                refresh_devices_ui(&weak, cfg);
+                                refresh_devices_ui(&weak, client.cfg);
                             }
-                            Err(e) => app.set_pairingError(format!("{e}").into()),
-                        }
-                    }
-                });
-            });
-        });
-    }
-    {
-        let weak = app.as_weak();
-        app.on_authResendVerification(move || {
-            let Ok(Some(cfg)) = AppConfig::load() else {
-                if let Some(app) = weak.upgrade() {
-                    app.set_pairingError("Not signed in.".into());
-                }
-                return;
-            };
-            if let Some(app) = weak.upgrade() {
-                app.set_pairingError("".into());
-            }
-            let weak = weak.clone();
-            spawn_account_task(weak.clone(), async move {
-                let client = AccountClient::from_config(cfg);
-                let result = client.resend_verification().await;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = weak.upgrade() {
-                        match result {
-                            Ok(()) => app.set_pairingError("Verification code sent.".into()),
-                            Err(e) => app.set_pairingError(format!("{e}").into()),
-                        }
-                    }
-                });
-            });
-        });
-    }
-    {
-        let weak = app.as_weak();
-        app.on_authForgotPassword(move || {
-            let app = match weak.upgrade() {
-                Some(a) => a,
-                None => return,
-            };
-            let relay = app.get_relayUrl().to_string();
-            let email = app.get_authEmail().to_string();
-            if email.trim().is_empty() {
-                app.set_pairingError("Enter your email first.".into());
-                return;
-            }
-            app.set_connecting(true);
-            app.set_pairingError("".into());
-            let weak = weak.clone();
-            spawn_account_task(weak.clone(), async move {
-                let result = AccountClient::forgot_password(&relay, &email).await;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = weak.upgrade() {
-                        app.set_connecting(false);
-                        match result {
-                            Ok(()) => {
-                                app.set_pairingSubView("reset".into());
-                                app.set_pairingError("Reset code sent — check your inbox.".into());
+                            Err(e) => {
+                                app.set_pairingError(format!("{e}").into());
                             }
-                            Err(e) => app.set_pairingError(format!("{e}").into()),
                         }
                     }
                 });
             });
-        });
-    }
-    {
-        let weak = app.as_weak();
-        app.on_authResetSubmit(move || {
-            let app = match weak.upgrade() {
-                Some(a) => a,
-                None => return,
-            };
-            let relay = app.get_relayUrl().to_string();
-            let email = app.get_authEmail().to_string();
-            let code = app.get_authResetCode().to_string();
-            let password = app.get_authPassword().to_string();
-            if code.trim().is_empty() || password.len() < 6 {
-                app.set_pairingError("Enter reset code and a password (6+ chars).".into());
-                return;
-            }
-            app.set_connecting(true);
-            app.set_pairingError("".into());
-            let weak = weak.clone();
-            spawn_account_task(weak.clone(), async move {
-                let result =
-                    AccountClient::reset_password(&relay, &email, &code, &password).await;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = weak.upgrade() {
-                        app.set_connecting(false);
-                        match result {
-                            Ok(()) => {
-                                app.set_pairingSubView("auth".into());
-                                app.set_pairingError(
-                                    "Password updated — sign in with your new password.".into(),
-                                );
-                            }
-                            Err(e) => app.set_pairingError(format!("{e}").into()),
-                        }
-                    }
-                });
-            });
-        });
-    }
-    {
-        let weak = app.as_weak();
-        app.on_authGoogleSignIn(move || {
-            let app = match weak.upgrade() {
-                Some(a) => a,
-                None => return,
-            };
-            let relay = app.get_relayUrl().to_string();
-            match AccountClient::google_oauth_url(&relay) {
-                Ok(url) => {
-                    open_browser(&url);
-                    app.set_pairingError(
-                        "Complete sign-in in your browser, then return here.".into(),
-                    );
-                }
-                Err(e) => app.set_pairingError(format!("{e}").into()),
-            }
         });
     }
     {
