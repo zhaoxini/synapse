@@ -17,6 +17,7 @@
 		AA00051E /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00051F /* ChatWebView.swift */; };
 		AA000520 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000521 /* PairingView.swift */; };
 		AA000522 /* WebHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000523 /* WebHost.swift */; };
+		AA000526 /* WebShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000527 /* WebShellView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		AA000521 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		AA000523 /* WebHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebHost.swift; sourceTree = "<group>"; };
 		AA000524 /* Synapse-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Synapse-Bridging-Header.h"; sourceTree = "<group>"; };
+		AA000527 /* WebShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebShellView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -50,15 +52,8 @@
 			isa = PBXGroup;
 			children = (
 				AA000511 /* SynapseApp.swift */,
-				AA000513 /* AppModel.swift */,
-				AA000515 /* SynapseConnection.swift */,
+				AA000527 /* WebShellView.swift */,
 				AA000517 /* SynapseModels.swift */,
-				AA000519 /* RootView.swift */,
-				AA00051B /* WorkspacesView.swift */,
-				AA00051D /* SessionSheet.swift */,
-				AA00051F /* ChatWebView.swift */,
-				AA000521 /* PairingView.swift */,
-				AA000523 /* WebHost.swift */,
 				AA000524 /* Synapse-Bridging-Header.h */,
 				AA000004 /* Info.plist */,
 			);
@@ -133,15 +128,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA000510 /* SynapseApp.swift in Sources */,
-				AA000512 /* AppModel.swift in Sources */,
-				AA000514 /* SynapseConnection.swift in Sources */,
+				AA000526 /* WebShellView.swift in Sources */,
 				AA000516 /* SynapseModels.swift in Sources */,
-				AA000518 /* RootView.swift in Sources */,
-				AA00051A /* WorkspacesView.swift in Sources */,
-				AA00051C /* SessionSheet.swift in Sources */,
-				AA00051E /* ChatWebView.swift in Sources */,
-				AA000520 /* PairingView.swift in Sources */,
-				AA000522 /* WebHost.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,12 +148,16 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				LIBRARY_SEARCH_PATHS = (
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
-					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
 					"$(SRCROOT)/../../target/aarch64-apple-ios-sim/release",
 				);
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
+				);
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-lc++", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -189,12 +181,16 @@
 				INFOPLIST_FILE = Sources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				LIBRARY_SEARCH_PATHS = (
+				LIBRARY_SEARCH_PATHS = "$(inherited)";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
-					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
 					"$(SRCROOT)/../../target/aarch64-apple-ios-sim/release",
 				);
-				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/aarch64-apple-ios/release",
+				);
+				OTHER_LDFLAGS = ("-lsynapse_app", "-ObjC", "-lc++", "-framework", "CoreText", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "CoreGraphics", "-framework", "MetalKit", "-framework", "UIKit", "-framework", "Foundation", "-framework", "WebKit", "-framework", "SwiftUI");
 				PRODUCT_BUNDLE_IDENTIFIER = com.synapse.app.gnjza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

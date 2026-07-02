@@ -1,7 +1,7 @@
 //! Local web chat UI on :8000 (account / relay pairing mode).
 
 use axum::Router;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::warn;
 
@@ -35,13 +35,13 @@ pub fn spawn() {
 }
 
 fn resolve_web_dir() -> Option<PathBuf> {
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../app/web");
+    let installed = homedir().map(|h| h.join(".synapse/web"));
     let candidates = [
         std::env::var_os("SYNAPSE_WEB_DIR").map(PathBuf::from),
-        homedir().map(|h| h.join(".synapse/web")),
-        Some(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../app/web"),
-        ),
+        pick_newer_web_dir(&dev, installed.as_ref()),
+        Some(dev),
+        installed,
     ];
     for dir in candidates.into_iter().flatten() {
         if dir.join("index.html").is_file() {
@@ -49,6 +49,28 @@ fn resolve_web_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Prefer the repo dev bundle when it is newer than the installed copy (local dev).
+fn pick_newer_web_dir(dev: &Path, installed: Option<&Path>) -> Option<PathBuf> {
+    let dev_index = dev.join("index.html");
+    if !dev_index.is_file() {
+        return None;
+    }
+    let Some(inst) = installed else {
+        return None;
+    };
+    let inst_index = inst.join("index.html");
+    if !inst_index.is_file() {
+        return Some(dev.clone());
+    }
+    let dev_m = std::fs::metadata(&dev_index).ok()?.modified().ok()?;
+    let inst_m = std::fs::metadata(&inst_index).ok()?.modified().ok()?;
+    if dev_m > inst_m {
+        Some(dev.clone())
+    } else {
+        None
+    }
 }
 
 fn homedir() -> Option<PathBuf> {

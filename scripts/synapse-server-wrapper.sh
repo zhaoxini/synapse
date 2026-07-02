@@ -21,10 +21,34 @@ WEB_DIR="${SYNAPSE_WEB_DIR:-$STATE_DIR/web}"
 START_TIMEOUT_SEC="${SYNAPSE_START_TIMEOUT:-25}"
 
 mkdir -p "$STATE_DIR"
+[[ -f "${STATE_DIR}/env" ]] && source "${STATE_DIR}/env"
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 port_open() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 web_port_open() { lsof -nP -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
+
+# Keep ~/.synapse/web in sync so :8000 never serves a stale bundle after git pull.
+sync_web_bundle() {
+  local src="" repo_root
+  if [[ -n "${SYNAPSE_WEB_SRC:-}" && -f "${SYNAPSE_WEB_SRC}/index.html" ]]; then
+    src="${SYNAPSE_WEB_SRC}"
+  elif repo_root="$(git -C "${BIN_DIR}" rev-parse --show-toplevel 2>/dev/null)" \
+      && [[ -f "${repo_root}/crates/app/web/index.html" ]]; then
+    src="${repo_root}/crates/app/web"
+  elif [[ -f "${HOME}/code/synapse/crates/app/web/index.html" ]]; then
+    src="${HOME}/code/synapse/crates/app/web"
+  elif [[ -f "${BIN_DIR}/../share/synapse/web/index.html" ]]; then
+    src="${BIN_DIR}/../share/synapse/web"
+  fi
+  [[ -n "$src" ]] || return 0
+  mkdir -p "$WEB_DIR"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "${src}/" "${WEB_DIR}/"
+  else
+    rm -rf "${WEB_DIR:?}"/*
+    cp -R "${src}/." "${WEB_DIR}/"
+  fi
+}
 
 resolve_web_dir() {
   if [[ -f "${WEB_DIR}/index.html" ]]; then
@@ -141,13 +165,14 @@ print_ok() {
 }
 
 do_start() {
+  sync_web_bundle
   local pid
   if [[ -f "$PIDFILE" ]]; then
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
     if [[ -n "$pid" ]] && pid_alive "$pid" && port_open; then
       start_web
       print_ok "$pid"
-      echo "    (already running)"
+      echo "    (already running — web bundle refreshed)"
       return 0
     fi
     rm -f "$PIDFILE"

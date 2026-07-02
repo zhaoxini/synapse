@@ -31,9 +31,6 @@ npx playwright install chromium >/dev/null 2>&1 || true
 echo "=== verify-ui.mjs ==="
 node verify-ui.mjs
 
-echo "=== verify-native-shell.mjs ==="
-node verify-native-shell.mjs
-
 echo "=== capture-screenshot.mjs ==="
 node capture-screenshot.mjs
 

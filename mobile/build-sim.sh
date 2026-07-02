@@ -10,6 +10,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE_ID="com.synapse.app.gnjza"
 
+"$ROOT/scripts/sync-web.sh"
+
 # Target the booted simulator by udid. A concrete device pins the arch to the
 # sim's (arm64 on Apple Silicon); a 'generic' destination drags in x86_64, which
 # the arm64-only Rust staticlib can't satisfy (link fails).

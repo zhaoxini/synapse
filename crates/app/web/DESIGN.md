@@ -6,21 +6,18 @@ This document is the source of truth for tokens, component structure, and layout
 
 ---
 
-## Hybrid architecture (iOS native shell + web chat)
+## Architecture (single web UI)
 
-Like Cursor / ChatGPT mobile:
+One Figma-aligned bundle in `crates/app/web/` everywhere:
 
-| Layer | Technology | Responsibility |
-|-------|------------|----------------|
-| **Shell** | SwiftUI (`mobile/ios/Sources/`) | Workspaces list, session sheet, navigation, system animations, haptics |
-| **Chat** | WKWebView + `crates/app/web/?shell=native` | Transcript, composer, streaming markdown, tool cards |
-| **Browser / Pages** | Full web bundle (default) | Same UI as before for GitHub Pages and dev |
+| Surface | Host | Bundle |
+|---------|------|--------|
+| **iOS** | Full-screen WKWebView + embedded Rust static host | Compiled into `libsynapse_app.a` |
+| **Browser / pairing** | `synapse-server` on `:8000` or static dev server | Same files under `crates/app/web/` (copied to `~/.synapse/web/` on install) |
 
-Native shell holds its own WebSocket for session/workspace state. Chat webview opens a second WS connection for the active session (server broadcasts to all clients).
+iOS and browser run the **same** Workspaces → session drawer → chat flow. Native code only hosts the webview (keyboard inset, haptics, clipboard).
 
-**Bridge:** `window.__synapse.openSession(id)` ← native; `chatReady` / haptic / copy → native via `webkit.messageHandlers.synapse`.
-
-**Build:** `./mobile/build-sim.sh` on macOS (iOS 16+). Web-only verification: `./scripts/verify-web.sh` + `verify-native-shell.mjs`.
+**Build:** `./mobile/build-sim.sh` on macOS. Web verification: `./scripts/verify-web.sh`.
 
 ---
 
@@ -40,7 +37,7 @@ register_project { path } ──► persists path, returns updated cwds
 
 **Terminology:** **Workspace** is the canonical name in UI and docs. *Repo* and *Project* mean the same thing (a git working directory path). Use **Workspace** in user-facing copy.
 
-**Mental model:** A **Workspace** is an absolute path to a folder (usually a git repo). A **Session** belongs to exactly one workspace (`session.cwd`, set at create). On **web**, the home screen lists workspaces with a session drawer. On **iOS**, SwiftUI owns the list + sheet; web is chat-only.
+**Mental model:** A **Workspace** is an absolute path to a folder (usually a git repo). A **Session** belongs to exactly one workspace (`session.cwd`, set at create). The home screen lists workspaces with a session drawer; chat is the same web bundle on iOS and browser.
 
 | Term (UI) | Protocol / code | Meaning |
 |-----------|-----------------|---------|

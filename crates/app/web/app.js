@@ -24,8 +24,6 @@ const searchWrap = $("searchWrap");
 const searchInput = $("searchInput");
 
 const URL_PARAMS = new URLSearchParams(location.search);
-/** iOS SwiftUI shell: native owns workspaces/nav; webview is chat-only. */
-const NATIVE_SHELL = URL_PARAMS.get("shell") === "native";
 
 const state = {
   ws: null,
@@ -33,7 +31,9 @@ const state = {
   backoff: 1000,
   connected: false,
   busy: false,
-  view: "workspaces", // "workspaces" | "chat" — home = workspace list
+  view: "workspaces", // "workspaces" | "chat"
+  screen: "workspaces", // workspaces | repo | chat (Figma 3-screen)
+  activeRepo: null,     // null | "all" | workspace path
   sessionDrawerWorkspace: null,
   searchOpen: false,
   searchQuery: "",
@@ -247,15 +247,6 @@ function setPairingFieldsEnabled(on) {
   }
 }
 
-function notifyNative(op, data) {
-  if (!NATIVE_SHELL) return;
-  try {
-    if (typeof webkit !== "undefined" && webkit.messageHandlers && webkit.messageHandlers.synapse) {
-      webkit.messageHandlers.synapse.postMessage(Object.assign({ op }, data || {}));
-    }
-  } catch {}
-}
-
 function applyCreds(c) {
   window.__SYNAPSE__ = c;
   persistCreds(c);
@@ -315,16 +306,9 @@ function doConnect(first) {
     if (window.__SYNAPSE__) persistCreds(window.__SYNAPSE__);
     hideConnectOverlay();
     $("reconnect").classList.remove("show");
-    if (NATIVE_SHELL) {
-      send({ op: "list" });
-      const sid = URL_PARAMS.get("sessionId");
-      if (sid) select(sid);
-      notifyNative("chatReady");
-    } else {
-      showWorkspaces();
-      send({ op: "list" });
-    }
-    if (!NATIVE_SHELL && !first && state.activeId) {
+    showWorkspaces();
+    send({ op: "list" });
+    if (!first && state.activeId) {
       send({ op: "history", sessionId: state.activeId, limit: 400 });
     }
   };
@@ -386,7 +370,7 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
-      if (state.view === "workspaces") renderWorkspaceList();
+      if (state.screen === "workspaces" || state.screen === "repo") refreshLists();
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -397,7 +381,7 @@ function handle(v) {
     case "event": handleEvent(v.event); break;
     case "error":
       state.creating = false;
-      if (state.view === "workspaces") renderWorkspaceList();
+      if (state.screen === "workspaces" || state.screen === "repo") refreshLists();
       toast(typeof v.error === "string" ? v.error : "error");
       break;
   }
@@ -424,7 +408,7 @@ function handleEvent(evt) {
       showWorkspaces();
       updateChrome();
     }
-    renderWorkspaceList();
+    refreshLists();
     return;
   }
   if (t === "system" && (sub === "turn_started" || sub === "turn_stopped" || sub === "bridge_error")) {
@@ -1793,9 +1777,14 @@ function updatePulse() {
 }
 
 // =================== sessions ===================
+function refreshLists() {
+  if (state.screen === "repo") renderRepoSessionList();
+  else if (state.screen === "workspaces") renderWorkspaceList();
+}
+
 function setSessions(list) {
   state.sessions = list || [];
-  if (state.view === "workspaces") renderWorkspaceList();
+  refreshLists();
   // After a server restart, auto-created sessions come back with new ids, so a
   // still-selected old id is now dead — requesting its history returns found:false
   // and the view stays stuck on the welcome page. Drop the dead id and fall through
@@ -1809,7 +1798,7 @@ function setSessions(list) {
 function upsertSession(s) {
   const i = state.sessions.findIndex(x => x.id === s.id);
   if (i >= 0) state.sessions[i] = s; else state.sessions.unshift(s);
-  if (state.view === "workspaces") renderWorkspaceList();
+  refreshLists();
 }
 // Track a session's running state from live turn_started/turn_stopped (broadcast
 // for every session) so the drawer dot and busy-on-open stay correct even for
@@ -1818,7 +1807,7 @@ function setSessionState(id, st) {
   const ses = state.sessions.find(x => x.id === id);
   if (!ses || ses.state === st) return;
   ses.state = st;
-  if (state.view === "workspaces") renderWorkspaceList();
+  refreshLists();
   if (id === state.activeId && state.view === "chat") updateChrome();
 }
 // Session titles come from the transcript's first user line, which is often
@@ -1939,50 +1928,86 @@ function workspacePaths() {
   });
 }
 
-function renderSessionDrawerBody(path) {
-  const body = $("drawerBody");
-  if (!body || normalizePath(state.sessionDrawerWorkspace) !== normalizePath(path)) return;
+const FOLDER_SVG = `<svg class="ws-icon" width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M2.5 7C2.5 6.17 3.17 5.5 4 5.5H9L10.5 7H18C18.83 7 19.5 7.67 19.5 8.5V16C19.5 16.83 18.83 17.5 18 17.5H4C3.17 17.5 2.5 16.83 2.5 16V7Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>`;
+const FOLDER_STACK_SVG = `<svg class="ws-icon" width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M2.5 8.5C2.5 7.67 3.17 7 4 7H8.5L10 8.5H17C17.83 8.5 18.5 9.17 18.5 10V16C18.5 16.83 17.83 17.5 17 17.5H4C3.17 17.5 2.5 16.83 2.5 16V8.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="M4.5 7V6C4.5 5.17 5.17 4.5 6 4.5H10L11.5 6H17.5C18.33 6 19 6.67 19 7.5V8.5" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" opacity="0.45"/></svg>`;
+const CHEV_SVG = `<span class="ws-chev" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+
+function showScreen(name) {
+  state.screen = name;
+  document.body.className = `screen-${name}`;
+  for (const id of ["screenWorkspaces", "screenRepo", "screenChat"]) {
+    const el = $(id);
+    if (!el) continue;
+    const on = (id === "screenWorkspaces" && name === "workspaces")
+      || (id === "screenRepo" && name === "repo")
+      || (id === "screenChat" && name === "chat");
+    el.classList.toggle("active", on);
+    el.hidden = !on;
+  }
+  if (name === "workspaces") {
+    state.view = "workspaces";
+    state.activeRepo = null;
+    updateChrome();
+    renderWorkspaceList();
+  } else if (name === "repo") {
+    state.view = "workspaces";
+    renderRepoSessionList();
+  } else if (name === "chat") {
+    state.view = "chat";
+    updateChrome();
+  }
+}
+
+function renderRepoSessionList() {
+  const body = $("repoSessionList");
+  if (!body) return;
   body.innerHTML = "";
+  const path = state.activeRepo;
+  const workspaceFilter = path === "all" ? null : path;
 
   const pending = normalizePath(state.pendingCwd);
-  if (state.creating && pending === normalizePath(path)) {
+  if (state.creating && path !== "all" && pending === normalizePath(path)) {
     const row = document.createElement("div");
     row.className = "sess-row creating";
     row.innerHTML =
-      sessionIconHtml({ state: "busy" }) +
+      `<span class="sess-icon dot"></span>` +
       `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
       `<div class="sess-sub working">Working</div></div>`;
     body.appendChild(row);
   }
 
-  const sessions = filteredSessions(path);
+  const sessions = filteredSessions(workspaceFilter);
   if (!sessions.length && !state.creating) {
     const hint = document.createElement("div");
     hint.className = "empty-hint";
-    hint.textContent = "No sessions yet";
+    hint.innerHTML = `No sessions yet<br><span class="empty-hint-sub">Tap + to start one</span>`;
     body.appendChild(hint);
-  } else {
-    for (const s of sessions) appendSessionRow(body, s);
+    return;
   }
+  for (const s of sessions) appendSessionRow(body, s, true);
+}
+
+function renderSessionDrawerBody(path) {
+  state.activeRepo = path === "all" ? "all" : normalizePath(path);
+  const rt = $("repoTitle");
+  if (rt) rt.textContent = path === "all" ? "All Repos" : basename(path);
+  renderRepoSessionList();
 }
 
 function openSessionDrawer(path) {
-  const norm = normalizePath(path);
-  if (!norm) return;
-  state.sessionDrawerWorkspace = norm;
-  $("drawerTitle").textContent = basename(norm);
-  renderSessionDrawerBody(norm);
-  $("drawerMask").classList.add("show");
-  $("sessionDrawer").classList.add("show");
-  $("sessionDrawer").setAttribute("aria-hidden", "false");
+  openRepoScreen(path);
+}
+
+function openRepoScreen(path) {
+  state.activeRepo = path === "all" ? "all" : normalizePath(path);
+  const rt = $("repoTitle");
+  if (rt) rt.textContent = path === "all" ? "All Repos" : basename(path);
+  showScreen("repo");
   haptic("light");
 }
 
 function closeSessionDrawer() {
   state.sessionDrawerWorkspace = null;
-  $("drawerMask").classList.remove("show");
-  $("sessionDrawer").classList.remove("show");
-  $("sessionDrawer").setAttribute("aria-hidden", "true");
 }
 
 function filteredSessions(workspacePath) {
@@ -2014,9 +2039,9 @@ function sessionIconHtml(s) {
   return `<span class="sess-icon dot"></span>`;
 }
 
-function appendSessionRow(parent, s) {
+function appendSessionRow(parent, s, inGlassCard) {
   const wrap = document.createElement("div");
-  wrap.className = "sess-row-wrap";
+  wrap.className = inGlassCard ? "sess-row-wrap" : "sess-row-wrap";
   const row = document.createElement("div");
   row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
   const sub = sessionSubtitle(s);
@@ -2024,12 +2049,17 @@ function appendSessionRow(parent, s) {
     ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
     : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
   const pin = s.pinned ? `<span class="sess-pin" aria-label="Pinned">★</span>` : "";
+  const icon = s.state === "busy"
+    ? `<span class="sess-icon spark">${SPARK_SVG.replace('width="22"', 'width="14"').replace('height="22"', 'height="14"')}</span>`
+    : `<span class="sess-icon dot"></span>`;
+  const time = relTime(s.started_at || 0);
   row.innerHTML =
-    sessionIconHtml(s) +
+    icon +
     `<div class="sess-body">` +
       `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
       subHtml +
     `</div>` +
+    `<div class="sess-row-meta"><span class="sess-time">${escapeHtml(time)}</span>${CHEV_SVG}</div>` +
     `<button type="button" class="sess-archive-btn" aria-label="Archive">${ARCHIVE_SVG}</button>`;
   wrap.appendChild(row);
   parent.appendChild(wrap);
@@ -2063,6 +2093,23 @@ function renderWorkspaceList() {
   }
 
   let any = false;
+
+  const allSessions = filteredSessions(null);
+  if (!q || allSessions.length) {
+    const allBtn = document.createElement("button");
+    allBtn.type = "button";
+    allBtn.className = "ws-row list-row";
+    const allCount = allSessions.length;
+    allBtn.innerHTML =
+      FOLDER_STACK_SVG +
+      `<span class="ws-name">All Repos</span>` +
+      (allCount ? `<span class="ws-count">${allCount}</span>` : "") +
+      CHEV_SVG;
+    allBtn.addEventListener("click", () => openRepoScreen("all"));
+    list.appendChild(allBtn);
+    any = true;
+  }
+
   for (const path of paths) {
     const label = basename(path);
     const sessions = filteredSessions(path);
@@ -2075,18 +2122,18 @@ function renderWorkspaceList() {
     any = true;
     const count = sessions.length;
     const countHtml = count ? `<span class="ws-count">${count}</span>` : "";
-    const row = document.createElement("div");
-    row.className = "ws-row";
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "ws-row list-row";
     row.innerHTML =
+      FOLDER_SVG +
       `<span class="ws-name">${escapeHtml(label)}</span>` +
       countHtml +
-      `<span class="ws-chev" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M7.5 5l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+      CHEV_SVG;
     row.title = path;
-    row.addEventListener("click", () => openSessionDrawer(path));
+    row.addEventListener("click", () => openRepoScreen(path));
     list.appendChild(row);
   }
-
-  if (state.sessionDrawerWorkspace) renderSessionDrawerBody(state.sessionDrawerWorkspace);
 
   if (!any && q) {
     const hint = document.createElement("div");
@@ -2170,7 +2217,7 @@ function openAddWorkspace() {
     const norm = normalizePath(path);
     state.pendingCwd = norm;
     send({ op: "register_project", path: norm });
-    renderWorkspaceList();
+    refreshLists();
   });
 }
 
@@ -2204,19 +2251,11 @@ function sessionSubtitle(s) {
 let navFromPop = false;
 
 function showWorkspaces() {
-  state.view = "workspaces";
-  document.body.classList.remove("mode-chat");
-  document.body.classList.add("mode-workspaces");
-  closeSessionDrawer();
-  updateChrome();
-  renderWorkspaceList();
+  showScreen("workspaces");
 }
 
 function showChat(pushHistory) {
-  state.view = "chat";
-  document.body.classList.remove("mode-workspaces");
-  document.body.classList.add("mode-chat");
-  updateChrome();
+  showScreen("chat");
   if (pushHistory !== false && !navFromPop) {
     history.pushState({ synapse: "chat", id: state.activeId }, "", location.href);
   }
@@ -2229,13 +2268,9 @@ function updateChrome() {
   searchWrap.classList.toggle("hidden", !state.searchOpen);
   const searchBtn = $("searchBtn");
   if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
-  if (state.view === "workspaces") {
-    pageTitle.textContent = "Workspaces";
-    chatTitle.hidden = true;
-  } else {
+  if (state.screen === "chat" || state.view === "chat") {
     const s = state.sessions.find(x => x.id === state.activeId);
-    chatTitle.textContent = s ? cleanTitle(s.name) : "New session";
-    chatTitle.hidden = false;
+    if (chatTitle) chatTitle.textContent = s ? cleanTitle(s.name) : "New session";
     if (inputEl) inputEl.placeholder = "Follow up…";
   }
 }
@@ -2277,21 +2312,14 @@ function select(id) {
     syncModelLabel(); syncLocalLabel(); syncPermLabel();
     const es = $("emptySub"); if (es) es.textContent = basename(s.cwd);
   }
-  if (!NATIVE_SHELL) closeSessionDrawer();
+  closeSessionDrawer();
   clearMessages();
   state.turn = null;
   state.loadingHistory = true;
   beginHistoryLoad();
   setBusy(s ? s.state === "busy" : false);
   send({ op: "history", sessionId: id, limit: 400 });
-  if (!NATIVE_SHELL) {
-    showChat();
-  } else {
-    state.view = "chat";
-    document.body.classList.add("mode-chat");
-    updateChrome();
-    notifyNative("sessionOpened", { sessionId: id, title: s ? cleanTitle(s.name) : "" });
-  }
+  showChat();
   haptic("light");
 }
 
@@ -2299,6 +2327,7 @@ function openSession(id) {
   if (!id) return;
   select(id);
 }
+
 function autoGrow() {
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
@@ -2347,21 +2376,32 @@ function doSend() {
 // =================== navigation ===================
 $("backBtn").addEventListener("click", () => {
   haptic("light");
-  if (state.view === "chat") {
+  if (state.screen === "chat" || state.view === "chat") {
     if (history.state && history.state.synapse === "chat") history.back();
+    else if (state.activeRepo) showScreen("repo");
     else showWorkspaces();
   }
 });
+$("repoBackBtn")?.addEventListener("click", () => { haptic("light"); showWorkspaces(); });
+$("repoNewBtn")?.addEventListener("click", () => {
+  haptic("light");
+  const cwd = state.activeRepo === "all" ? workspacePaths()[0] : state.activeRepo;
+  startNewDraft(cwd || undefined);
+});
+$("dockExpand")?.addEventListener("click", () => {
+  haptic("light");
+  const cwd = state.activeRepo && state.activeRepo !== "all" ? state.activeRepo : workspacePaths()[0];
+  startNewDraft(cwd || undefined);
+});
 window.addEventListener("popstate", () => {
-  if (state.view === "chat") {
+  if (state.screen === "chat" || state.view === "chat") {
     navFromPop = true;
-    showWorkspaces();
+    if (state.activeRepo) showScreen("repo");
+    else showWorkspaces();
     navFromPop = false;
   }
 });
 $("newBtn").addEventListener("click", (e) => { e.stopPropagation(); haptic("light"); openAddWorkspace(); });
-$("drawerClose").addEventListener("click", () => { haptic("light"); closeSessionDrawer(); });
-$("drawerMask").addEventListener("click", closeSessionDrawer);
 $("searchBtn").addEventListener("click", () => {
   haptic("light");
   state.searchOpen = !state.searchOpen;
@@ -2370,11 +2410,11 @@ $("searchBtn").addEventListener("click", () => {
 });
 searchInput.addEventListener("input", () => {
   state.searchQuery = searchInput.value.trim();
-  if (state.view === "workspaces") renderWorkspaceList();
+  refreshLists();
 });
 $("archivedToggle").addEventListener("click", () => {
   state.showArchived = !state.showArchived;
-  renderWorkspaceList();
+  refreshLists();
 });
 
 function startNewDraft(cwd) {
@@ -2404,7 +2444,7 @@ function newSession() {
   if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
   state.creating = true;
-  if (state.view === "workspaces") renderWorkspaceList();
+  refreshLists();
   send({ op: "create", opts });
 }
 
@@ -2563,9 +2603,6 @@ function contentText(content) {
 function firstLine(s) { return str(s).split("\n")[0].slice(0, 80); }
 
 // =================== boot ===================
-if (NATIVE_SHELL) {
-  document.body.classList.add("mode-native-shell", "mode-chat");
-}
 initAttachMenu();
 initComposerAntiAutofill();
 initKeyboardInset();
@@ -2617,12 +2654,12 @@ function initKeyboardInset() {
 }
 
 function initPullRefresh() {
-  if (NATIVE_SHELL) return;
-  const list = $("workspaceList");
+  const scroll = document.querySelector("#screenWorkspaces .screen-scroll");
+  const list = scroll || $("workspaceList");
   const indicator = $("pullRefresh");
   let startY = 0, pulling = false;
   list.addEventListener("touchstart", (e) => {
-    if (list.scrollTop > 0 || state.view !== "workspaces") return;
+    if (list.scrollTop > 0 || state.screen !== "workspaces") return;
     startY = e.touches[0].clientY;
     pulling = true;
   }, { passive: true });

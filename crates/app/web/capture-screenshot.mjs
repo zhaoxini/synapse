@@ -10,7 +10,7 @@ import path from "path";
 
 const STATIC = "http://127.0.0.1:8765";
 const WS_PORT = 14173;
-const OUT = process.env.SYNAPSE_SCREENSHOT_DIR || "/opt/cursor/artifacts/screenshots";
+const OUT = process.env.SYNAPSE_SCREENSHOT_DIR || path.join("/tmp", "synapse-screenshots");
 
 function mockSessions() {
   const now = Date.now();
@@ -67,17 +67,17 @@ async function main() {
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT, "01-repos.png"), fullPage: false });
 
-    await page.locator(".ws-row").first().click();
+    await page.locator(".ws-row").nth(1).click();
     await page.waitForTimeout(300);
-    await page.screenshot({ path: path.join(OUT, "01-repos-drawer.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "02-repo-sessions.png"), fullPage: false });
 
-    await page.locator("#drawerBody .sess-row").first().click();
+    await page.locator("#repoSessionList .sess-row").first().click();
     await page.waitForTimeout(500);
-    await page.screenshot({ path: path.join(OUT, "02-chat.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "03-chat.png"), fullPage: false });
 
     await page.locator("#backBtn").click();
     await page.waitForTimeout(400);
-    await page.screenshot({ path: path.join(OUT, "03-repos.png"), fullPage: false });
+    await page.screenshot({ path: path.join(OUT, "04-repo-sessions.png"), fullPage: false });
 
     console.log(`Screenshots saved to ${OUT}`);
   } finally {

@@ -62,7 +62,7 @@ When `SYNAPSE_MIRROR` is set: **mirror `/releases/` cache → GitHub Releases CD
 
 Each platform tarball ships `synapse-server-wrapper.sh` at the top level. `install.sh` **only** installs that file as `synapse-server` — never fetches wrapper from mirror or GitHub. If install fails, re-run the official installer; do not hand-patch `/usr/local/bin/synapse-server`.
 
-**iOS hybrid (SwiftUI shell + web chat):** `mobile/ios/Sources/*.swift` — native workspaces/nav; web loads with `?shell=native`. Browser/Pages still use the full web bundle.
+**iOS web shell:** `mobile/ios/Sources/WebShellView.swift` — full-screen WKWebView loading the same Figma-aligned bundle as browser `:8000` (embedded via `synapse_web_url()`). No separate SwiftUI workspaces UI.
 
 ## Web UI design system
 

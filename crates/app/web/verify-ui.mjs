@@ -93,44 +93,44 @@ async function main() {
     !(await page.locator("#connectOverlay").isVisible())
       ? ok("Overlay hides after connect") : fail("Overlay still visible after connect");
 
-    await page.locator("body.mode-workspaces").waitFor({ timeout: 3000 });
+    await page.locator("body.screen-workspaces").waitFor({ timeout: 3000 });
     ok("Workspaces view is default");
 
     (await page.locator("#pageTitle").textContent()) === "Workspaces"
       ? ok("Workspaces page title") : fail("Workspaces title missing");
 
-    !(await page.locator(".ws-row", { hasText: "All Repos" }).count())
-      ? ok("No duplicate All Repos node") : fail("All Repos aggregate should be removed");
+    (await page.locator(".ws-row", { hasText: "All Repos" }).count()) >= 1
+      ? ok("All Repos row present") : fail("All Repos row missing");
 
     (await page.locator(".ws-row").count()) >= 1
       ? ok("Workspace rows rendered") : fail("Workspace rows missing");
 
     !(await page.locator("#workspaceList .sess-row").count())
-      ? ok("Sessions not inline on main list") : fail("Sessions should only appear in drawer");
+      ? ok("Sessions not inline on main list") : fail("Sessions should only appear on repo screen");
 
-    await page.locator(".ws-row").first().click();
+    await page.locator(".ws-row").nth(1).click();
     await page.waitForTimeout(200);
-    (await page.locator("#sessionDrawer.show").count()) > 0
-      ? ok("Session drawer opens on workspace tap") : fail("Session drawer missing");
-    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
-      ? ok("Workspace tap stays on list view") : fail("Workspace tap should not leave list view");
+    (await page.locator("#screenRepo.active").count()) > 0
+      ? ok("Repo screen opens on workspace tap") : fail("Repo screen missing");
+    (await page.evaluate(() => document.body.classList.contains("screen-repo")))
+      ? ok("Repo screen body class") : fail("Workspace tap should open repo screen");
 
-    (await page.locator("#drawerBody .sess-row").count()) > 0
-      ? ok("Sessions shown in drawer") : fail("Drawer sessions missing");
+    (await page.locator("#repoSessionList .sess-row").count()) > 0
+      ? ok("Sessions shown on repo screen") : fail("Repo sessions missing");
 
-    !(await page.locator("#drawerBody .tree-new-row").count())
-      ? ok("No new session row in drawer") : fail("Drawer should not show new session row");
+    !(await page.locator("#repoSessionList .tree-new-row").count())
+      ? ok("No new session row on repo screen") : fail("Repo should not show new session row");
 
     !(await page.locator("#composer").isVisible())
       ? ok("Composer hidden on workspaces list") : fail("Composer should be hidden on workspaces list");
 
-    await page.locator("#drawerClose").click();
+    await page.locator("#repoBackBtn").click();
     await page.waitForTimeout(150);
 
     const sessBefore = await page.evaluate(() => window.__synapse.state.sessions.length);
     await page.locator("#newBtn").click();
     await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
+    (await page.evaluate(() => document.body.classList.contains("screen-workspaces")))
       ? ok("+ stays on workspaces list") : fail("+ should not leave workspaces list");
     (await page.locator("#bottomSheet.show").count()) > 0
       && (await page.locator("#sheetTitle").textContent()) === "Add workspace"
@@ -144,7 +144,7 @@ async function main() {
       window.__synapse.startNewDraft("/workspace/synapse");
     });
     await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-chat")))
+    (await page.evaluate(() => document.body.classList.contains("screen-chat")))
       ? ok("New session opens draft chat") : fail("New session should open draft chat");
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added until first message") : fail("New session prematurely created");
@@ -153,7 +153,7 @@ async function main() {
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
 
-    await page.locator(".ws-row").first().click();
+    await page.locator(".ws-row").nth(1).click();
     await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.spark").count()) > 0
@@ -166,12 +166,12 @@ async function main() {
       ? ok("Inline archive button on rows") : fail("Archive button missing");
 
     // chat + skeleton (use idle session)
-    await page.locator("#drawerBody .sess-row").nth(1).click();
+    await page.locator("#repoSessionList .sess-row").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);
 
-    (await page.evaluate(() => document.body.classList.contains("mode-chat")))
+    (await page.evaluate(() => document.body.classList.contains("screen-chat")))
       ? ok("Switches to chat mode on session tap") : fail("Chat mode not activated");
 
     (await page.locator("#composerControls").isVisible())
@@ -227,7 +227,12 @@ async function main() {
 
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
-    (await page.evaluate(() => document.body.classList.contains("mode-workspaces")))
+    (await page.evaluate(() => document.body.classList.contains("screen-repo")))
+      ? ok("Back returns to repo session list") : fail("Back did not return to repo screen");
+
+    await page.locator("#repoBackBtn").click();
+    await page.waitForTimeout(200);
+    (await page.evaluate(() => document.body.classList.contains("screen-workspaces")))
       ? ok("Back returns to workspaces list") : fail("Back did not return to workspaces list");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));

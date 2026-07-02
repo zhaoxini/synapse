@@ -2,12 +2,19 @@ import SwiftUI
 
 @main
 struct SynapseApp: App {
-    @StateObject private var app = AppModel()
+    @StateObject private var shell = WebShell()
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(app)
+            Group {
+                if let wv = shell.webView {
+                    WebShellView(webView: wv)
+                        .ignoresSafeArea()
+                } else {
+                    ProgressView("Loading…")
+                }
+            }
+            .onAppear { shell.boot() }
         }
     }
 }
