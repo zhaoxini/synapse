@@ -1,0 +1,68 @@
+# Deploy synapse-relay to the public VPS (zx0623.duckdns.org).
+#
+# Secrets: RELAY_SSH (e.g. root@192.3.179.202), RELAY_SSH_KEY
+
+name: Deploy Relay
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - "crates/relay/**"
+      - "scripts/deploy-relay.sh"
+      - ".github/workflows/deploy-relay.yml"
+
+jobs:
+  deploy:
+    name: upgrade synapse-relay on VPS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build synapse-relay (Linux x86_64)
+        run: cargo build --release -p synapse-relay --target x86_64-unknown-linux-gnu
+
+      - name: Upload binary and restart service
+        env:
+          RELAY_SSH: ${{ secrets.RELAY_SSH }}
+          RELAY_SSH_KEY: ${{ secrets.RELAY_SSH_KEY }}
+        run: |
+          if [ -z "${RELAY_SSH_KEY:-}" ] || [ -z "${RELAY_SSH:-}" ]; then
+            echo "RELAY_SSH / RELAY_SSH_KEY not configured — skip deploy"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$RELAY_SSH_KEY" > ~/.ssh/relay_key
+          chmod 600 ~/.ssh/relay_key
+          host="${RELAY_SSH#*@}"
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
+          BIN=target/x86_64-unknown-linux-gnu/release/synapse-relay
+          test -x "$BIN"
+          scp -i ~/.ssh/relay_key -o StrictHostKeyChecking=accept-new \
+            "$BIN" "${RELAY_SSH}:/opt/synapse-relay/bin/synapse-relay.new"
+          ssh -i ~/.ssh/relay_key -o StrictHostKeyChecking=accept-new "${RELAY_SSH}" '
+            set -e
+            systemctl stop synapse-relay
+            install -m 755 /opt/synapse-relay/bin/synapse-relay.new /opt/synapse-relay/bin/synapse-relay
+            rm -f /opt/synapse-relay/bin/synapse-relay.new
+            systemctl start synapse-relay
+            sleep 2
+            systemctl is-active synapse-relay
+          '
+
+      - name: Verify pairing exchange API
+        run: |
+          code=$(curl -s -o /tmp/exchange-body -w '%{http_code}' -X POST \
+            'https://zx0623.duckdns.org/api/v1/pairing-codes/exchange' \
+            -H 'Content-Type: application/json' \
+            -d '{"code":"000000"}')
+          echo "HTTP ${code}"
+          cat /tmp/exchange-body || true
+          test "${code}" = "404"
+          grep -q 'invalid or expired pairing code' /tmp/exchange-body
