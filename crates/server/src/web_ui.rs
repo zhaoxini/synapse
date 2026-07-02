@@ -39,7 +39,7 @@ fn resolve_web_dir() -> Option<PathBuf> {
     let installed = homedir().map(|h| h.join(".synapse/web"));
     let candidates = [
         std::env::var_os("SYNAPSE_WEB_DIR").map(PathBuf::from),
-        pick_newer_web_dir(&dev, installed.as_ref()),
+        pick_newer_web_dir(&dev, installed.as_deref()),
         Some(dev),
         installed,
     ];
@@ -62,12 +62,12 @@ fn pick_newer_web_dir(dev: &Path, installed: Option<&Path>) -> Option<PathBuf> {
     };
     let inst_index = inst.join("index.html");
     if !inst_index.is_file() {
-        return Some(dev.clone());
+        return Some(dev.to_path_buf());
     }
     let dev_m = std::fs::metadata(&dev_index).ok()?.modified().ok()?;
     let inst_m = std::fs::metadata(&inst_index).ok()?.modified().ok()?;
     if dev_m > inst_m {
-        Some(dev.clone())
+        Some(dev.to_path_buf())
     } else {
         None
     }

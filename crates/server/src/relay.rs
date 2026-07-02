@@ -47,8 +47,10 @@ async fn connect_once(relay_url: &str, device_id: &str, token: &str, local_ws: &
     let (mut relay_tx, mut relay_rx) = relay_socket.split();
     let (mut local_tx, mut local_rx) = local_socket.split();
 
-    // relay -> local
-    let to_local = tokio::spawn(async move {
+    // Pump both directions concurrently — if we only read local_rx in the
+    // main task, a relay-side close leaves the bridge stuck forever (no
+    // reconnect) while the relay registry shows the device offline (503).
+    let mut relay_to_local = tokio::spawn(async move {
         while let Some(Ok(msg)) = relay_rx.next().await {
             if matches!(msg, Message::Close(_)) {
                 break;
@@ -59,15 +61,30 @@ async fn connect_once(relay_url: &str, device_id: &str, token: &str, local_ws: &
         }
     });
 
-    // local -> relay
-    while let Some(Ok(msg)) = local_rx.next().await {
-        if matches!(msg, Message::Close(_)) {
-            break;
+    let mut local_to_relay = tokio::spawn(async move {
+        while let Some(Ok(msg)) = local_rx.next().await {
+            if matches!(msg, Message::Close(_)) {
+                break;
+            }
+            if relay_tx.send(msg).await.is_err() {
+                break;
+            }
         }
-        if relay_tx.send(msg).await.is_err() {
-            break;
+    });
+
+    enum Side { Relay, Local }
+    match tokio::select! {
+        _ = &mut relay_to_local => Side::Relay,
+        _ = &mut local_to_relay => Side::Local,
+    } {
+        Side::Relay => {
+            local_to_relay.abort();
+            let _ = relay_to_local.await;
+        }
+        Side::Local => {
+            relay_to_local.abort();
+            let _ = local_to_relay.await;
         }
     }
-    to_local.abort();
     Ok(())
 }
