@@ -810,6 +810,20 @@ body.mode-native-shell #chatView {
   border-radius: 16px; padding: 20px 18px;
 }
 .connect-card h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+.pair-view.hidden { display: none; }
+.pair-field {
+  display: block; font-size: 12px; color: var(--ink-3); margin: 8px 0 4px;
+}
+.pair-field input {
+  width: 100%; box-sizing: border-box; height: 42px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--control); color: var(--ink); padding: 0 12px; font-size: 15px;
+}
+.pair-field input:focus { outline: none; border-color: var(--focus-border); }
+.pair-error { margin: 8px 0 0; font-size: 13px; color: var(--danger); line-height: 1.4; }
+.pair-error.hidden { display: none; }
+.pair-user { margin: 0 0 10px; font-size: 12px; color: var(--ink-3); text-align: center; }
+.pair-user.hidden { display: none; }
 .connect-hint { margin: 0 0 14px; font-size: 13px; color: var(--ink-2); line-height: 1.45; }
 .connect-hint code { font-family: var(--font-mono); font-size: 12px; color: var(--ink); }
 #pairLink {

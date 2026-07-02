@@ -122,17 +122,46 @@
 
   <div id="connectOverlay">
     <div class="connect-card">
-      <h2>Connect to Claude Code</h2>
-      <p class="connect-hint">Paste the <code>synapse://</code> link from the terminal where <code>synapse-server</code> is running.</p>
-      <textarea id="pairLink" rows="3" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0" autocomplete="off"></textarea>
-      <button id="pairConnect" class="connect-btn">Connect</button>
+      <h2>Synapse</h2>
+
+      <div id="pairAuth" class="pair-view">
+        <p class="connect-hint" id="authHint">Sign in to connect your computer</p>
+        <label class="pair-field">Relay server
+          <input id="relayUrl" type="text" value="https://zx0623.duckdns.org" autocomplete="off" />
+        </label>
+        <label class="pair-field">Email
+          <input id="authEmail" type="email" autocomplete="username" />
+        </label>
+        <label class="pair-field">Password
+          <input id="authPassword" type="password" autocomplete="current-password" />
+        </label>
+        <label id="authNameRow" class="pair-field hidden">Name
+          <input id="authName" type="text" autocomplete="name" />
+        </label>
+        <p id="pairError" class="pair-error hidden" role="alert"></p>
+        <button id="authSubmit" type="button" class="connect-btn">Sign in</button>
+        <button id="authToggle" type="button" class="connect-btn secondary">New here? Create an account</button>
+      </div>
+
+      <div id="pairDevices" class="pair-view hidden">
+        <p class="connect-hint">Run <code>synapse-server</code> on your computer, then enter the <strong>pairing code</strong> from the terminal.</p>
+        <label class="pair-field">Pairing code
+          <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
+        </label>
+        <p id="pairUserEmail" class="pair-user hidden"></p>
+        <button id="pairCodeConnect" type="button" class="connect-btn">Connect</button>
+        <button id="signOutBtn" type="button" class="connect-btn secondary">Sign out</button>
+      </div>
+
       <details class="connect-manual">
-        <summary>Manual connection</summary>
+        <summary>Manual connection (advanced)</summary>
+        <p class="connect-hint">Direct LAN / dev only — paste a <code>synapse://</code> link or host + token.</p>
+        <textarea id="pairLink" rows="2" placeholder="synapse://192.168.1.10:4173?token=CODE&tls=0" autocomplete="off"></textarea>
         <label>Host <input id="pairHost" type="text" placeholder="192.168.1.10" autocomplete="off" /></label>
         <label>Port <input id="pairPort" type="text" placeholder="4173" inputmode="numeric" /></label>
         <label>Token <input id="pairToken" type="text" placeholder="CODE" autocomplete="off" /></label>
         <label class="pair-tls"><input id="pairTls" type="checkbox" /> Secure (wss / TLS)</label>
-        <button id="pairManualConnect" class="connect-btn secondary">Connect manually</button>
+        <button id="pairManualConnect" type="button" class="connect-btn secondary">Connect manually</button>
       </details>
     </div>
   </div>

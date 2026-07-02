@@ -61,8 +61,168 @@ const state = {
 
 state.stream = createStreamState();
 
-// ---- credential injection: native / URL / localStorage ----
+// ---- credential injection: native / URL / localStorage / relay pairing ----
 const CREDS_KEY = "synapse_creds";
+const APP_SESSION_KEY = "synapse_app_session";
+const DEFAULT_RELAY = "https://zx0623.duckdns.org";
+let authIsRegister = false;
+
+function relayUrls(relay) {
+  let raw = relay.trim().replace(/\/$/, "");
+  const tls = raw.startsWith("wss://") || raw.startsWith("https://");
+  let wsBase = raw;
+  if (raw.startsWith("https://")) wsBase = raw.replace("https://", "wss://");
+  else if (raw.startsWith("http://")) wsBase = raw.replace("http://", "ws://");
+  else if (!raw.startsWith("ws")) wsBase = `wss://${raw}`;
+  const apiBase = wsBase.replace("wss://", "https://").replace("ws://", "http://");
+  const hostPort = wsBase.replace(/^wss?:\/\//, "");
+  let host, port;
+  const i = hostPort.lastIndexOf(":");
+  if (i > 0 && /^\d+$/.test(hostPort.slice(i + 1))) {
+    host = hostPort.slice(0, i);
+    port = parseInt(hostPort.slice(i + 1), 10);
+  } else {
+    host = hostPort;
+    port = tls ? 443 : 80;
+  }
+  return { relayApi: apiBase, relayWs: wsBase, relayHost: host, relayPort: port, relayTls: tls };
+}
+
+function loadAppSession() {
+  try {
+    const raw = localStorage.getItem(APP_SESSION_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+function saveAppSession(session) {
+  try { localStorage.setItem(APP_SESSION_KEY, JSON.stringify(session)); } catch {}
+}
+
+function clearAppSession() {
+  try { localStorage.removeItem(APP_SESSION_KEY); } catch {}
+}
+
+async function apiPost(url, body, token) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!r.ok) {
+    let msg = r.statusText;
+    try {
+      const j = await r.json();
+      msg = j.error || j.message || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+function showPairError(msg) {
+  const el = $("pairError");
+  if (!el) return;
+  if (msg) {
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function showPairView(name) {
+  $("pairAuth")?.classList.toggle("hidden", name !== "auth");
+  $("pairDevices")?.classList.toggle("hidden", name !== "devices");
+  const session = loadAppSession();
+  const emailEl = $("pairUserEmail");
+  if (emailEl) {
+    if (session?.user_email) {
+      emailEl.textContent = `Signed in as ${session.user_email}`;
+      emailEl.classList.remove("hidden");
+    } else {
+      emailEl.textContent = "";
+      emailEl.classList.add("hidden");
+    }
+  }
+}
+
+async function authSubmit() {
+  const relay = ($("relayUrl")?.value || DEFAULT_RELAY).trim();
+  const email = ($("authEmail")?.value || "").trim();
+  const password = ($("authPassword")?.value || "").trim();
+  const name = ($("authName")?.value || "").trim();
+  if (!email || !password) {
+    showPairError("Email and password required");
+    return;
+  }
+  showPairError("");
+  const { relayApi } = relayUrls(relay);
+  const path = authIsRegister ? "register" : "login";
+  const body = authIsRegister
+    ? { email, password, name: name || email.split("@")[0] }
+    : { email, password, name: "" };
+  const btn = $("authSubmit");
+  if (btn) btn.disabled = true;
+  try {
+    const auth = await apiPost(`${relayApi}/api/v1/auth/${path}`, body);
+    const urls = relayUrls(relay);
+    saveAppSession({
+      relay_api: relayApi,
+      relay_ws: urls.relayWs,
+      relay_host: auth.relay_host,
+      relay_port: auth.relay_port,
+      relay_tls: auth.relay_tls,
+      session_token: auth.session_token,
+      user_email: auth.user?.email || email,
+    });
+    showPairView("devices");
+    showPairError("");
+    const code = URL_PARAMS.get("code");
+    if (code) await claimPairingCode(code);
+  } catch (e) {
+    showPairError(String(e.message || e));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function claimPairingCode(code) {
+  const session = loadAppSession();
+  if (!session) {
+    showPairView("auth");
+    showPairError("Sign in first");
+    return;
+  }
+  code = (code || ($("pairCode")?.value || "")).trim().replace(/\D/g, "");
+  if (!code) {
+    showPairError("Enter the 6-digit pairing code");
+    return;
+  }
+  showPairError("");
+  const btn = $("pairCodeConnect");
+  if (btn) btn.disabled = true;
+  try {
+    const resp = await apiPost(
+      `${session.relay_api}/api/v1/pairing-codes/claim`,
+      { code },
+      session.session_token
+    );
+    applyCreds({
+      host: resp.relay_host,
+      port: String(resp.relay_port),
+      token: resp.connect_token,
+      tls: resp.relay_tls,
+      path: "/connect",
+      deviceId: resp.device_id,
+    });
+  } catch (e) {
+    const msg = String(e.message || e);
+    showPairError(/not found|invalid|expired/i.test(msg) ? "Invalid or expired pairing code" : msg);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
 function creds() {
   if (window.__SYNAPSE__) return window.__SYNAPSE__;
@@ -137,13 +297,20 @@ function splitHostPort(authority, tls) {
 function showConnectOverlay() {
   $("connectOverlay").classList.remove("hidden");
   setPairingFieldsEnabled(true);
+  if (loadAppSession()) {
+    showPairView("devices");
+    const code = URL_PARAMS.get("code");
+    if (code && $("pairCode")) $("pairCode").value = code.replace(/\D/g, "").slice(0, 6);
+  } else {
+    showPairView("auth");
+  }
 }
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");
   setPairingFieldsEnabled(false);
 }
 
-const PAIRING_FIELD_IDS = ["pairLink", "pairHost", "pairPort", "pairToken"];
+const PAIRING_FIELD_IDS = ["pairLink", "pairHost", "pairPort", "pairToken", "pairCode", "relayUrl", "authEmail", "authPassword", "authName"];
 
 function setPairingFieldsEnabled(on) {
   for (const id of PAIRING_FIELD_IDS) {
@@ -2482,11 +2649,37 @@ if (creds()) hideConnectOverlay();
 updateSend();
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
-$("pairConnect").addEventListener("click", pairFromForm);
-$("pairManualConnect").addEventListener("click", pairFromForm);
+$("authSubmit")?.addEventListener("click", authSubmit);
+$("authToggle")?.addEventListener("click", () => {
+  authIsRegister = !authIsRegister;
+  const submit = $("authSubmit");
+  const toggle = $("authToggle");
+  if (submit) submit.textContent = authIsRegister ? "Create account" : "Sign in";
+  if (toggle) toggle.textContent = authIsRegister ? "Already have an account? Sign in" : "New here? Create an account";
+  $("authNameRow")?.classList.toggle("hidden", !authIsRegister);
+  showPairError("");
+});
+$("authPassword")?.addEventListener("keydown", (e) => { if (e.key === "Enter") authSubmit(); });
+$("pairCodeConnect")?.addEventListener("click", () => claimPairingCode());
+$("pairCode")?.addEventListener("keydown", (e) => { if (e.key === "Enter") claimPairingCode(); });
+$("signOutBtn")?.addEventListener("click", () => {
+  clearAppSession();
+  clearCreds();
+  window.__SYNAPSE__ = null;
+  showPairView("auth");
+  showPairError("");
+});
+$("pairManualConnect")?.addEventListener("click", pairFromForm);
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
-if (!NATIVE_SHELL) connect();
-else if (creds()) connect();
+(async () => {
+  const code = URL_PARAMS.get("code");
+  if (!creds() && loadAppSession() && code) {
+    showConnectOverlay();
+    await claimPairingCode(code);
+  }
+  if (!NATIVE_SHELL) connect();
+  else if (creds()) connect();
+})();
 
 function initComposerAntiAutofill() {
   if (!inputEl) return;
