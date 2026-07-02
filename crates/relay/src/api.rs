@@ -6,19 +6,24 @@ use crate::db::{Db, User};
 use crate::AppState;
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tower_http::cors::{Any, CorsLayer};
 
 const SESSION_DAYS: i64 = 30;
 const CONNECT_TOKEN_SECS: i64 = 300;
 const PAIRING_CODE_SECS: i64 = 86400;
 
 pub fn router() -> Router<AppState> {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/v1/auth/register", post(register))
@@ -28,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/pairing-codes", post(create_pairing_code))
         .route("/api/v1/pairing-codes/claim", post(claim_pairing_code))
         .route("/api/v1/pairing-codes/exchange", post(exchange_pairing_code))
+        .layer(cors)
 }
 
 async fn health(State(s): State<AppState>) -> impl IntoResponse {
