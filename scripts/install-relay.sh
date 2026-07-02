@@ -278,6 +278,19 @@ main() {
   info "Domain:  ${RELAY_DOMAIN}"
   info "Port:    ${RELAY_PORT}"
 
+  if [[ "${SYNAPSE_RELAY_UPGRADE:-0}" = "1" ]] \
+    && [[ -f "/etc/letsencrypt/live/${RELAY_DOMAIN}/fullchain.pem" ]] \
+    && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    info "Upgrade mode — refreshing synapse-relay binary only"
+    stop_conflicting
+    install_binary
+    write_systemd
+    verify
+    echo ""
+    echo "Relay upgraded: wss://${RELAY_DOMAIN}"
+    return
+  fi
+
   install_packages
   stop_conflicting
   obtain_cert
