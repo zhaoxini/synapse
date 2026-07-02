@@ -214,24 +214,20 @@ function showConnectOverlay() {
 
 function showConnecting() {
   const overlay = $("connectOverlay");
+  const card = overlay?.querySelector(".connect-card");
   const hint = overlay?.querySelector(".connect-hint");
-  const fields = overlay?.querySelector(".pair-field");
-  const btn = $("pairCodeConnect");
   if (hint) hint.textContent = "Connecting with pairing code…";
-  if (fields) fields.classList.add("hidden");
-  if (btn) btn.classList.add("hidden");
+  card?.classList.add("connecting");
   overlay?.classList.remove("hidden");
   setPairingFieldsEnabled(false);
 }
 
 function resetConnectOverlay() {
   const overlay = $("connectOverlay");
+  const card = overlay?.querySelector(".connect-card");
   const hint = overlay?.querySelector(".connect-hint");
-  const fields = overlay?.querySelector(".pair-field");
-  const btn = $("pairCodeConnect");
   if (hint) hint.textContent = "Enter the pairing code from synapse-server.";
-  if (fields) fields.classList.remove("hidden");
-  if (btn) btn.classList.remove("hidden");
+  card?.classList.remove("connecting");
 }
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");

@@ -810,6 +810,10 @@ body.mode-native-shell #chatView {
   border-radius: 16px; padding: 20px 18px;
 }
 .connect-card h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; }
+.connect-card.connecting .pair-field,
+.connect-card.connecting #pairCodeConnect,
+.connect-card.connecting .connect-manual,
+.connect-card.connecting #pairError { display: none; }
 .pair-view.hidden { display: none; }
 .pair-field {
   display: block; font-size: 12px; color: var(--ink-3); margin: 8px 0 4px;
