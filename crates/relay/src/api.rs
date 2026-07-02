@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/devices/:id/connect", post(device_connect))
         .route("/api/v1/pairing-codes", post(create_pairing_code))
         .route("/api/v1/pairing-codes/claim", post(claim_pairing_code))
+        .route("/api/v1/pairing-codes/exchange", post(exchange_pairing_code))
 }
 
 async fn health(State(s): State<AppState>) -> impl IntoResponse {
@@ -260,6 +261,29 @@ async fn create_pairing_code(State(s): State<AppState>, headers: HeaderMap) -> i
 #[derive(Deserialize)]
 struct ClaimPairingBody {
     code: String,
+}
+
+/// Web / URL pairing: the 6-digit code alone authorizes a one-time relay connect.
+async fn exchange_pairing_code(
+    State(s): State<AppState>,
+    Json(body): Json<ClaimPairingBody>,
+) -> impl IntoResponse {
+    let code = body.code.trim();
+    let device_id = match s.db.pairing_code_device(code) {
+        Ok(Some(id)) => id,
+        Ok(None) => return api_error(StatusCode::NOT_FOUND, "invalid or expired pairing code"),
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let user_id = match s.db.device_by_id(&device_id) {
+        Ok(Some(d)) => d.user_id,
+        Ok(None) => return api_error(StatusCode::NOT_FOUND, "device not found"),
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let _ = s.db.delete_pairing_code(code);
+    match issue_connect_token(&s, &device_id, &user_id) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 async fn claim_pairing_code(

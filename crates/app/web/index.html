@@ -123,35 +123,12 @@
   <div id="connectOverlay">
     <div class="connect-card">
       <h2>Synapse</h2>
-
-      <div id="pairAuth" class="pair-view">
-        <p class="connect-hint" id="authHint">Sign in to connect your computer</p>
-        <label class="pair-field">Relay server
-          <input id="relayUrl" type="text" value="https://zx0623.duckdns.org" autocomplete="off" />
-        </label>
-        <label class="pair-field">Email
-          <input id="authEmail" type="email" autocomplete="username" />
-        </label>
-        <label class="pair-field">Password
-          <input id="authPassword" type="password" autocomplete="current-password" />
-        </label>
-        <label id="authNameRow" class="pair-field hidden">Name
-          <input id="authName" type="text" autocomplete="name" />
-        </label>
-        <p id="pairError" class="pair-error hidden" role="alert"></p>
-        <button id="authSubmit" type="button" class="connect-btn">Sign in</button>
-        <button id="authToggle" type="button" class="connect-btn secondary">New here? Create an account</button>
-      </div>
-
-      <div id="pairDevices" class="pair-view hidden">
-        <p class="connect-hint">Run <code>synapse-server</code> on your computer, then enter the <strong>pairing code</strong> from the terminal.</p>
-        <label class="pair-field">Pairing code
-          <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
-        </label>
-        <p id="pairUserEmail" class="pair-user hidden"></p>
-        <button id="pairCodeConnect" type="button" class="connect-btn">Connect</button>
-        <button id="signOutBtn" type="button" class="connect-btn secondary">Sign out</button>
-      </div>
+      <p class="connect-hint">Enter the pairing code from <code>synapse-server</code>.</p>
+      <label class="pair-field">Pairing code
+        <input id="pairCode" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
+      </label>
+      <p id="pairError" class="pair-error hidden" role="alert"></p>
+      <button id="pairCodeConnect" type="button" class="connect-btn">Connect</button>
 
       <details class="connect-manual">
         <summary>Manual connection (advanced)</summary>
