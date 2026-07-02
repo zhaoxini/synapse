@@ -167,6 +167,17 @@ install_bins() {
   echo "${dest}"
 }
 
+install_web_ui() {
+  local root="$1"
+  local web_root="${SYNAPSE_STATE_DIR:-$HOME/.synapse}/web"
+  if [ ! -d "${root}/web" ]; then
+    return 0
+  fi
+  mkdir -p "${web_root}"
+  cp -R "${root}/web/." "${web_root}/"
+  info "Web UI installed to ${web_root}"
+}
+
 main() {
   need_cmd curl
   need_cmd tar
@@ -194,6 +205,7 @@ main() {
   [ -x "${root}/bin/synapse-server" ] || die "synapse-server binary not found in archive"
 
   dest="$(install_bins "$(pick_install_dir)" "${root}")"
+  install_web_ui "${root}"
 
   rm -rf "${TMPDIR_INSTALL}"
   TMPDIR_INSTALL=""

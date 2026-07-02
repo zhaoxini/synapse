@@ -13,14 +13,74 @@ REAL="${BIN_DIR}/synapse-server.real"
 
 STATE_DIR="${SYNAPSE_STATE_DIR:-$HOME/.synapse}"
 PIDFILE="${SYNAPSE_PIDFILE:-$STATE_DIR/server.pid}"
+WEB_PIDFILE="${SYNAPSE_WEB_PIDFILE:-$STATE_DIR/web.pid}"
 LOGFILE="${SYNAPSE_LOG:-$STATE_DIR/server.log}"
 PORT="${SYNAPSE_PORT:-4173}"
+WEB_PORT="${SYNAPSE_WEB_PORT:-8000}"
+WEB_DIR="${SYNAPSE_WEB_DIR:-$STATE_DIR/web}"
 START_TIMEOUT_SEC="${SYNAPSE_START_TIMEOUT:-25}"
 
 mkdir -p "$STATE_DIR"
 
 pid_alive() { kill -0 "$1" 2>/dev/null; }
 port_open() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
+web_port_open() { lsof -nP -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
+
+resolve_web_dir() {
+  if [[ -f "${WEB_DIR}/index.html" ]]; then
+    printf '%s' "${WEB_DIR}"
+    return 0
+  fi
+  local share="${BIN_DIR}/../share/synapse/web"
+  if [[ -f "${share}/index.html" ]]; then
+    printf '%s' "${share}"
+    return 0
+  fi
+  return 1
+}
+
+start_web() {
+  local dir pid
+  if web_port_open; then
+    return 0
+  fi
+  if ! dir="$(resolve_web_dir)"; then
+    echo "WARN  web UI files missing — reinstall synapse or set SYNAPSE_WEB_DIR" >&2
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "WARN  python3 not found — cannot serve web UI on :${WEB_PORT}" >&2
+    return 0
+  fi
+  nohup python3 -m http.server "${WEB_PORT}" --directory "${dir}" >>"${LOGFILE}" 2>&1 &
+  pid=$!
+  echo "$pid" >"$WEB_PIDFILE"
+  local deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    if web_port_open; then
+      return 0
+    fi
+    pid_alive "$pid" || break
+    sleep 0.2
+  done
+  echo "WARN  web UI did not open port ${WEB_PORT}" >&2
+}
+
+stop_web() {
+  local pid=""
+  [[ -f "$WEB_PIDFILE" ]] && pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && pid_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 15); do pid_alive "$pid" || break; sleep 0.2; done
+    pid_alive "$pid" && kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$WEB_PIDFILE"
+  if web_port_open && command -v lsof >/dev/null 2>&1; then
+    for pid in $(lsof -nP -iTCP:"${WEB_PORT}" -sTCP:LISTEN -t 2>/dev/null || true); do
+      kill "$pid" 2>/dev/null || true
+    done
+  fi
+}
 
 stop_stale() {
   command -v lsof >/dev/null 2>&1 || return 0
@@ -81,6 +141,7 @@ do_start() {
   if [[ -f "$PIDFILE" ]]; then
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
     if [[ -n "$pid" ]] && pid_alive "$pid" && port_open; then
+      start_web
       print_ok "$pid"
       echo "    (already running)"
       return 0
@@ -112,6 +173,7 @@ do_start() {
     fi
     if port_open; then
       sleep 1
+      start_web
       print_ok "$pid"
       return 0
     fi
@@ -127,6 +189,7 @@ do_start() {
 
 do_stop() {
   local pid=""
+  stop_web
   [[ -f "$PIDFILE" ]] && pid="$(cat "$PIDFILE" 2>/dev/null || true)"
   if [[ -n "$pid" ]] && pid_alive "$pid"; then
     kill "$pid" 2>/dev/null || true

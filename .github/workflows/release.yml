@@ -86,6 +86,9 @@ jobs:
           cp scripts/SERVER-README.md "${STAGE}/README.md"
           cp scripts/install-server.sh "${STAGE}/install.sh"
           cp scripts/synapse-server-wrapper.sh "${STAGE}/synapse-server-wrapper.sh"
+          mkdir -p "${STAGE}/web"
+          cp crates/app/web/index.html crates/app/web/app.js crates/app/web/app.css crates/app/web/logo.svg "${STAGE}/web/"
+          cp -R crates/app/web/vendor "${STAGE}/web/"
           cp scripts/install.sh "${STAGE}/install-remote.sh"
           echo "${VERSION}" > "${STAGE}/VERSION"
           tar -czf "${STAGE}.tar.gz" "${STAGE}"
@@ -103,6 +106,9 @@ jobs:
           Copy-Item scripts/SERVER-README.md "$stage/README.md"
           Copy-Item scripts/install-server.sh "$stage/install.sh"
           Copy-Item scripts/synapse-server-wrapper.sh "$stage/synapse-server-wrapper.sh"
+          New-Item -ItemType Directory -Force -Path "$stage/web" | Out-Null
+          Copy-Item crates/app/web/index.html, crates/app/web/app.js, crates/app/web/app.css, crates/app/web/logo.svg "$stage/web/"
+          Copy-Item -Recurse crates/app/web/vendor "$stage/web/vendor"
           Copy-Item scripts/install.sh "$stage/install-remote.sh"
           Set-Content "$stage/VERSION" $version
           Compress-Archive -Path $stage -DestinationPath "$stage.zip" -Force
