@@ -210,8 +210,35 @@ impl Db {
     }
 
     pub fn create_pairing_code(&self, code: &str, device_id: &str, expires_at: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM pairing_codes WHERE device_id = ?1",
+            params![device_id],
+        )?;
+        conn.execute(
+            "INSERT INTO pairing_codes (code, device_id, expires_at) VALUES (?1, ?2, ?3)",
+            params![code, device_id, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn pairing_code_for_device(&self, device_id: &str) -> Result<Option<(String, i64)>> {
+        let now = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT code, expires_at FROM pairing_codes WHERE device_id = ?1 AND expires_at > ?2 ORDER BY expires_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![device_id, now])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some((row.get(0)?, row.get(1)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn extend_pairing_code(&self, code: &str, device_id: &str, expires_at: i64) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT OR REPLACE INTO pairing_codes (code, device_id, expires_at) VALUES (?1, ?2, ?3)",
+            "UPDATE pairing_codes SET expires_at = ?3 WHERE code = ?1 AND device_id = ?2",
             params![code, device_id, expires_at],
         )?;
         Ok(())

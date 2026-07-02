@@ -16,7 +16,7 @@ use serde_json::json;
 
 const SESSION_DAYS: i64 = 30;
 const CONNECT_TOKEN_SECS: i64 = 300;
-const PAIRING_CODE_SECS: i64 = 600;
+const PAIRING_CODE_SECS: i64 = 86400;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -246,8 +246,18 @@ async fn create_pairing_code(State(s): State<AppState>, headers: HeaderMap) -> i
     {
         return api_error(StatusCode::UNAUTHORIZED, "invalid device credentials");
     }
-    let code = new_pairing_code();
     let expires = chrono::Utc::now().timestamp() + PAIRING_CODE_SECS;
+    if let Ok(Some((existing, _))) = s.db.pairing_code_for_device(&device_id) {
+        if let Err(e) = s.db.extend_pairing_code(&existing, &device_id, expires) {
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        }
+        return Json(PairingCodeResp {
+            code: existing,
+            expires_in: PAIRING_CODE_SECS,
+        })
+        .into_response();
+    }
+    let code = new_pairing_code();
     if let Err(e) = s.db.create_pairing_code(&code, &device_id, expires) {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
@@ -279,7 +289,6 @@ async fn exchange_pairing_code(
         Ok(None) => return api_error(StatusCode::NOT_FOUND, "device not found"),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
-    let _ = s.db.delete_pairing_code(code);
     match issue_connect_token(&s, &device_id, &user_id) {
         Ok(v) => Json(v).into_response(),
         Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),

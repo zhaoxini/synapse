@@ -9,6 +9,7 @@ mod startup;
 mod tail;
 mod tls;
 mod tunnel;
+mod web_ui;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -181,9 +182,17 @@ async fn main() -> Result<()> {
         Some(Commands::PairingCode) => {
             let cfg =
                 account::Config::load()?.context("not signed in — run synapse-server first")?;
+            if let Some(code) = account::load_pairing_code() {
+                println!("\n  Pairing code:  {}\n", code);
+                println!("  Valid while synapse-server is running.\n");
+                println!(
+                    "  Web: http://127.0.0.1:8000/?code={code}\n",
+                );
+                return Ok(());
+            }
             let code = account::create_pairing_code(&cfg).await?;
             println!("\n  Pairing code:  {}\n", code.code);
-            println!("  Expires in {} seconds.", code.expires_in);
+            println!("  Valid while synapse-server is running.\n");
             println!(
                 "  Enter this code in the Synapse app (same account: {}).\n",
                 cfg.user_email
@@ -226,6 +235,7 @@ async fn run_server(args: RunArgs) -> Result<()> {
     println!("  Working dir:    {}", cwd.display());
 
     if saved.is_some() {
+        web_ui::spawn();
         // Account mode — phone connects via relay; keep output minimal.
         if let Some(cfg) = &saved {
             println!("  Signed in as:   {}", cfg.user_email);
@@ -234,8 +244,9 @@ async fn run_server(args: RunArgs) -> Result<()> {
                 println!("\n  ┌─────────────────────────────────────┐");
                 println!("  │  Pairing code:  {:>6}               │", code.code);
                 println!("  └─────────────────────────────────────┘");
-                println!("\n  Open the Synapse app → sign in with the same account");
-                println!("  → tap this computer, or enter the code above.\n");
+                println!("\n  Web:  http://127.0.0.1:8000/?code={}", code.code);
+                println!("  (code stays valid while this server is running)\n");
+                account::spawn_pairing_refresh(cfg.clone());
             }
         }
     } else {

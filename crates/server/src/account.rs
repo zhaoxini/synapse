@@ -239,9 +239,29 @@ async fn register_device(
     })
 }
 
+pub fn pairing_code_path() -> PathBuf {
+    homedir().join(".synapse").join("pairing-code")
+}
+
+pub fn save_pairing_code(code: &str) -> Result<()> {
+    let path = pairing_code_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{code}\n"))?;
+    Ok(())
+}
+
+pub fn load_pairing_code() -> Option<String> {
+    std::fs::read_to_string(pairing_code_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
+}
+
 pub async fn create_pairing_code(cfg: &Config) -> Result<PairingCodeResp> {
     let client = reqwest::Client::new();
-    let resp = client
+    let resp: PairingCodeResp = client
         .post(format!("{}/api/v1/pairing-codes", cfg.relay_api))
         .header(
             "Authorization",
@@ -255,7 +275,23 @@ pub async fn create_pairing_code(cfg: &Config) -> Result<PairingCodeResp> {
         .json()
         .await
         .context("pairing code response")?;
+    save_pairing_code(&resp.code)?;
     Ok(resp)
+}
+
+/// Keep relay pairing code alive for as long as the server runs.
+pub fn spawn_pairing_refresh(cfg: Config) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(240));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match create_pairing_code(&cfg).await {
+                Ok(resp) => tracing::debug!(code = %resp.code, "pairing code refreshed"),
+                Err(e) => tracing::warn!("pairing code refresh failed: {e}"),
+            }
+        }
+    });
 }
 
 pub fn default_device_name() -> String {

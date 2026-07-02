@@ -40,10 +40,11 @@ resolve_web_dir() {
 }
 
 start_web() {
-  local dir pid
+  # synapse-server (>=0.2.7) serves the web UI itself on :8000 in account mode.
   if web_port_open; then
     return 0
   fi
+  local dir pid
   if ! dir="$(resolve_web_dir)"; then
     echo "WARN  web UI files missing — reinstall synapse or set SYNAPSE_WEB_DIR" >&2
     return 0
@@ -52,7 +53,7 @@ start_web() {
     echo "WARN  python3 not found — cannot serve web UI on :${WEB_PORT}" >&2
     return 0
   fi
-  nohup python3 -m http.server "${WEB_PORT}" --directory "${dir}" >>"${LOGFILE}" 2>&1 &
+  nohup python3 -m http.server "${WEB_PORT}" --bind 127.0.0.1 --directory "${dir}" >>"${LOGFILE}" 2>&1 &
   pid=$!
   echo "$pid" >"$WEB_PIDFILE"
   local deadline=$((SECONDS + 5))
@@ -102,6 +103,9 @@ stop_stale() {
 }
 
 pairing_code() {
+  if [[ -f "${STATE_DIR}/pairing-code" ]]; then
+    tr -d '[:space:]' <"${STATE_DIR}/pairing-code" | grep -Eo '[0-9]{6}' | head -1 && return
+  fi
   "$REAL" pairing-code 2>/dev/null | grep -Eo '[0-9]{6}' | head -1 || true
 }
 

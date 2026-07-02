@@ -39,8 +39,8 @@ if ! BIN="$(pick_binary)"; then
 fi
 
 info "Deploy ${BIN} -> ${RELAY_SSH}:${INSTALL_PREFIX}/bin/synapse-relay"
-scp "${BIN}" "${ROOT}/scripts/vps-upgrade-relay.sh" \
-  "${RELAY_SSH}:/tmp/synapse-relay.new" "${RELAY_SSH}:/tmp/vps-upgrade-relay.sh"
+scp "${BIN}" "${RELAY_SSH}:/tmp/synapse-relay.new"
+scp "${ROOT}/scripts/vps-upgrade-relay.sh" "${RELAY_SSH}:/tmp/vps-upgrade-relay.sh"
 ssh "${RELAY_SSH}" "chmod +x /tmp/vps-upgrade-relay.sh && bash /tmp/vps-upgrade-relay.sh /tmp/synapse-relay.new && rm -f /tmp/synapse-relay.new /tmp/vps-upgrade-relay.sh"
 
 info "Verify health + exchange endpoint…"
