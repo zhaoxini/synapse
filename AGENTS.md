@@ -50,7 +50,9 @@ User install path: `curl -fsSL https://zx0623.duckdns.org/install.sh | bash` →
    - `https://zx0623.duckdns.org/releases/synapse-<ver>-aarch64-apple-darwin.tar.gz`
    - `https://zx0623.duckdns.org/install.sh` (updated script)
 3. **Smoke-test install**: `curl -fsSL https://zx0623.duckdns.org/install.sh | bash`
-4. **CI**: `.github/workflows/release.yml` `sync-mirror` job needs `RELAY_SSH` + `RELAY_SSH_KEY` secrets so future tags auto-sync.
+4. **Auto-deploy (no manual SSH):**
+   - **VPS timer (primary):** `synapse-auto-upgrade.timer` on zx0623.duckdns.org polls GitHub Releases every 10 min and upgrades relay + syncs mirror. Installed via `./scripts/setup-vps-autoupgrade.sh`.
+   - **CI (optional, faster):** `.github/workflows/release.yml` deploy jobs need `RELAY_SSH` + `RELAY_SSH_KEY` secrets — run `./scripts/setup-github-deploy-secrets.sh` once as **zhaoxini** repo admin.
 
 ### `install.sh` download order (must keep)
 

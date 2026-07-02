@@ -39,16 +39,9 @@ if ! BIN="$(pick_binary)"; then
 fi
 
 info "Deploy ${BIN} -> ${RELAY_SSH}:${INSTALL_PREFIX}/bin/synapse-relay"
-scp "${BIN}" "${RELAY_SSH}:${INSTALL_PREFIX}/bin/synapse-relay.new"
-ssh "${RELAY_SSH}" "
-  set -e
-  systemctl stop ${SERVICE_NAME}
-  install -m 755 ${INSTALL_PREFIX}/bin/synapse-relay.new ${INSTALL_PREFIX}/bin/synapse-relay
-  rm -f ${INSTALL_PREFIX}/bin/synapse-relay.new
-  systemctl start ${SERVICE_NAME}
-  sleep 2
-  systemctl is-active ${SERVICE_NAME}
-"
+scp "${BIN}" "${ROOT}/scripts/vps-upgrade-relay.sh" \
+  "${RELAY_SSH}:/tmp/synapse-relay.new" "${RELAY_SSH}:/tmp/vps-upgrade-relay.sh"
+ssh "${RELAY_SSH}" "chmod +x /tmp/vps-upgrade-relay.sh && bash /tmp/vps-upgrade-relay.sh /tmp/synapse-relay.new && rm -f /tmp/synapse-relay.new /tmp/vps-upgrade-relay.sh"
 
 info "Verify health + exchange endpoint…"
 curl -fsS "https://${RELAY_HOST}/api/health" >/dev/null || true
