@@ -127,6 +127,7 @@ async function connectWithCode(code) {
   } catch (e) {
     const msg = String(e.message || e);
     showPairError(/not found|invalid|expired|404/i.test(msg) ? "Invalid or expired pairing code" : msg);
+    resetConnectOverlay();
     showConnectOverlay();
     return false;
   } finally {
@@ -210,8 +211,31 @@ function showConnectOverlay() {
   const code = normalizePairCode(URL_PARAMS.get("code"));
   if (code && $("pairCode")) $("pairCode").value = code;
 }
+
+function showConnecting() {
+  const overlay = $("connectOverlay");
+  const hint = overlay?.querySelector(".connect-hint");
+  const fields = overlay?.querySelector(".pair-field");
+  const btn = $("pairCodeConnect");
+  if (hint) hint.textContent = "Connecting with pairing code…";
+  if (fields) fields.classList.add("hidden");
+  if (btn) btn.classList.add("hidden");
+  overlay?.classList.remove("hidden");
+  setPairingFieldsEnabled(false);
+}
+
+function resetConnectOverlay() {
+  const overlay = $("connectOverlay");
+  const hint = overlay?.querySelector(".connect-hint");
+  const fields = overlay?.querySelector(".pair-field");
+  const btn = $("pairCodeConnect");
+  if (hint) hint.textContent = "Enter the pairing code from synapse-server.";
+  if (fields) fields.classList.remove("hidden");
+  if (btn) btn.classList.remove("hidden");
+}
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");
+  resetConnectOverlay();
   setPairingFieldsEnabled(false);
 }
 
@@ -316,6 +340,7 @@ function doConnect(first) {
     state.connected = false;
     if (first) {
       toast("Could not connect — check link and server");
+      resetConnectOverlay();
       showConnectOverlay();
     } else {
       $("reconnect").classList.add("show");
@@ -2559,19 +2584,21 @@ $("pairCode")?.addEventListener("keydown", (e) => { if (e.key === "Enter") conne
 $("pairManualConnect")?.addEventListener("click", pairFromForm);
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
 (async () => {
+  const urlCode = normalizePairCode(URL_PARAMS.get("code"));
+  // ?code= in the URL always wins over saved creds — that's the share link contract.
+  if (urlCode) {
+    clearCreds();
+    showConnecting();
+    const ok = await connectWithCode(urlCode);
+    if (ok) return;
+    return;
+  }
   if (creds()) {
     hideConnectOverlay();
     connect();
     return;
   }
-  const code = normalizePairCode(URL_PARAMS.get("code"));
-  if (code) {
-    const ok = await connectWithCode(code);
-    if (ok) return;
-  } else {
-    showConnectOverlay();
-  }
-  if (!NATIVE_SHELL) connect();
+  showConnectOverlay();
 })();
 
 function initComposerAntiAutofill() {
