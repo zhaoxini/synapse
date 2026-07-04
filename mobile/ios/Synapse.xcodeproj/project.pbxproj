@@ -113,9 +113,14 @@
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = ();
-			inputPaths = ();
+			inputPaths = (
+				"$(SRCROOT)/../../crates/app/web/index.html",
+				"$(SRCROOT)/../../crates/app/web/app.css",
+				"$(SRCROOT)/../../crates/app/web/app.js",
+			);
 			name = "Build Rust staticlib";
-			outputPaths = ("$(SRCROOT)/../../target/aarch64-apple-ios/release/libsynapse_app.a");
+			outputPaths = (
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "cd \"$SRCROOT/../..\"\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then RUST_T=\"aarch64-apple-ios-sim\"; else RUST_T=\"aarch64-apple-ios\"; fi\ncargo rustc -p synapse-app --lib --target \"$RUST_T\" --crate-type staticlib --release\n";
