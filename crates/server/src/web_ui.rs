@@ -1,8 +1,10 @@
 //! Local web chat UI on :8000 (account / relay pairing mode).
 
+use axum::http::{header, HeaderValue};
 use axum::Router;
 use std::path::{Path, PathBuf};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::warn;
 
 const WEB_PORT: u16 = 8000;
@@ -26,7 +28,13 @@ pub fn spawn() {
         };
         let index = dir.join("index.html");
         let service = ServeDir::new(&dir).not_found_service(ServeFile::new(index));
-        let app = Router::new().fallback_service(service);
+        let app =
+            Router::new()
+                .fallback_service(service)
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ));
         tracing::info!("web UI at http://127.0.0.1:{WEB_PORT}/");
         if axum::serve(listener, app).await.is_err() {
             warn!("web UI server exited");

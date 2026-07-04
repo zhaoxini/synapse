@@ -32,7 +32,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/devices/:id/connect", post(device_connect))
         .route("/api/v1/pairing-codes", post(create_pairing_code))
         .route("/api/v1/pairing-codes/claim", post(claim_pairing_code))
-        .route("/api/v1/pairing-codes/exchange", post(exchange_pairing_code))
+        .route(
+            "/api/v1/pairing-codes/exchange",
+            post(exchange_pairing_code),
+        )
         .layer(cors)
 }
 

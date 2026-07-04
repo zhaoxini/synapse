@@ -22,9 +22,7 @@ pub fn force_stop_existing_server(port: u16) -> Result<()> {
             let hint = process_args(*pid)
                 .map(|a| format!(" ({a})"))
                 .unwrap_or_default();
-            bail!(
-                "port {port} is already used by pid {pid}{hint} — stop it or pass --port"
-            );
+            bail!("port {port} is already used by pid {pid}{hint} — stop it or pass --port");
         }
     }
 
@@ -97,7 +95,9 @@ fn process_args(pid: u32) -> Option<String> {
 }
 
 fn signal_pid(pid: u32, sig: &str) -> Result<()> {
-    let status = Command::new("kill").args([sig, &pid.to_string()]).status()?;
+    let status = Command::new("kill")
+        .args([sig, &pid.to_string()])
+        .status()?;
     if status.success() {
         Ok(())
     } else {

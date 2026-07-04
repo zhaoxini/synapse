@@ -185,9 +185,7 @@ async fn main() -> Result<()> {
             if let Some(code) = account::load_pairing_code() {
                 println!("\n  Pairing code:  {}\n", code);
                 println!("  Valid while synapse-server is running.\n");
-                println!(
-                    "  Web: http://127.0.0.1:8000/?code={code}\n",
-                );
+                println!("  Web: http://127.0.0.1:8000/?code={code}\n",);
                 return Ok(());
             }
             let code = account::create_pairing_code(&cfg).await?;
@@ -225,9 +223,8 @@ async fn run_server(args: RunArgs) -> Result<()> {
         .default_model
         .or_else(|| std::env::var("SYNAPSE_DEFAULT_MODEL").ok());
     let manager = SessionManager::new(bin.clone(), cwd.clone(), default_model);
-    let (router, token) = http::router(manager.clone(), args.token);
-
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
+    let (router, token) = http::router(manager.clone(), args.token, addr.port());
     let scheme = if args.tls { "wss" } else { "ws" };
 
     println!("\n  Synapse server is running.\n");

@@ -72,7 +72,10 @@ async fn connect_once(relay_url: &str, device_id: &str, token: &str, local_ws: &
         }
     });
 
-    enum Side { Relay, Local }
+    enum Side {
+        Relay,
+        Local,
+    }
     match tokio::select! {
         _ = &mut relay_to_local => Side::Relay,
         _ = &mut local_to_relay => Side::Local,

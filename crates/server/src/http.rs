@@ -6,6 +6,7 @@
 //   GET /api/pair                 -> { ok }
 // Commands over WS: {op:"create"|"send"|"refresh"|"list", ...}
 
+use crate::account;
 use crate::manager::{CreateOpts, SessionManager};
 use axum::{
     extract::{
@@ -26,6 +27,7 @@ use std::sync::Arc;
 pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub token: String,
+    pub port: u16,
 }
 
 fn gen_token() -> String {
@@ -36,19 +38,68 @@ fn gen_token() -> String {
         .collect()
 }
 
-pub fn router(manager: Arc<SessionManager>, token: Option<String>) -> (Router, String) {
+pub fn router(manager: Arc<SessionManager>, token: Option<String>, port: u16) -> (Router, String) {
     let token = token.unwrap_or_else(gen_token);
     let state = AppState {
         manager,
         token: token.clone(),
+        port,
     };
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/pair", get(pair))
         .route("/api/sessions", get(sessions))
+        .route(
+            "/api/v1/pairing-codes/exchange",
+            axum::routing::post(exchange_pairing_code),
+        )
         .route("/", get(ws_handler))
         .with_state(state);
     (app, token)
+}
+
+#[derive(Deserialize)]
+struct ExchangeBody {
+    code: String,
+}
+
+/// Local pairing for http://127.0.0.1:8000/?code=XXXXXX — same path as relay exchange.
+async fn exchange_pairing_code(
+    State(s): State<AppState>,
+    axum::Json(body): axum::Json<ExchangeBody>,
+) -> impl IntoResponse {
+    let code: String = body.code.chars().filter(|c| c.is_ascii_digit()).collect();
+    if code.len() != 6 {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "invalid pairing code"})),
+        )
+            .into_response();
+    }
+    let Some(saved) = account::load_pairing_code() else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "invalid or expired pairing code"})),
+        )
+            .into_response();
+    };
+    if saved != code {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(json!({"error": "invalid or expired pairing code"})),
+        )
+            .into_response();
+    }
+    axum::Json(json!({
+        "device_id": "",
+        "connect_token": s.token,
+        "relay_host": "127.0.0.1",
+        "relay_port": s.port,
+        "relay_tls": false,
+        "local": true,
+        "expires_in": 86400,
+    }))
+    .into_response()
 }
 
 async fn health(State(s): State<AppState>) -> impl IntoResponse {
@@ -107,6 +158,7 @@ async fn client_loop(state: AppState, socket: WebSocket) {
         "models": state.manager.catalog(),
         "defaultModel": state.manager.default_model_id(),
         "cwds": state.manager.cwds().await,
+        "registeredProjects": state.manager.registered_projects(),
     });
     let _ = ws_tx.send(Message::Text(hello.to_string())).await;
 
@@ -413,7 +465,12 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 let cwds = state.manager.refresh_cwds().await;
                 let _ = out_tx
                     .send(Message::Text(
-                        json!({"type":"cwds","cwds":cwds}).to_string(),
+                        json!({
+                            "type":"cwds",
+                            "cwds":cwds,
+                            "registeredProjects": state.manager.registered_projects(),
+                        })
+                        .to_string(),
                     ))
                     .await;
             }
@@ -423,7 +480,12 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                     Ok(cwds) => {
                         let _ = out_tx
                             .send(Message::Text(
-                                json!({"type":"cwds","cwds":cwds}).to_string(),
+                                json!({
+                                    "type":"cwds",
+                                    "cwds":cwds,
+                                    "registeredProjects": state.manager.registered_projects(),
+                                })
+                                .to_string(),
                             ))
                             .await;
                     }

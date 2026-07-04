@@ -151,7 +151,7 @@ fn merge_projects(discovered: Vec<String>, manual: Vec<String>) -> Vec<String> {
     let mut set = HashSet::new();
     for p in discovered.into_iter().chain(manual) {
         let n = normalize_path_string(&p);
-        if !n.is_empty() {
+        if !n.is_empty() && std::path::Path::new(&n).exists() {
             set.insert(n);
         }
     }
@@ -220,6 +220,10 @@ impl SessionManager {
     /// composer's project picker.
     pub async fn cwds(&self) -> Vec<String> {
         self.cwds.lock().await.clone()
+    }
+
+    pub fn registered_projects(&self) -> Vec<String> {
+        merge_projects(Vec::new(), load_manual_projects())
     }
 
     /// Re-scan ~/.claude.json projects, merge with manually registered paths.
@@ -866,6 +870,20 @@ mod tests {
         assert_eq!(expand_home("~"), PathBuf::from(&home));
         assert_eq!(expand_home("/abs/path"), PathBuf::from("/abs/path"));
         assert_eq!(expand_home("~user"), PathBuf::from("~user")); // not a path expansion
+    }
+
+    #[test]
+    fn merge_projects_drops_missing_paths() {
+        let existing = std::env::temp_dir();
+        let missing = existing.join(format!("synapse-missing-{}", std::process::id()));
+        let existing_s = normalize_path_string(&existing.to_string_lossy());
+        let missing_s = missing.to_string_lossy().to_string();
+        let out = merge_projects(
+            vec![existing.to_string_lossy().to_string()],
+            vec![missing_s.clone()],
+        );
+        assert!(out.contains(&existing_s));
+        assert!(!out.contains(&missing_s));
     }
 
     // AC1 (server half): a send must broadcast the user message to subscribers so
