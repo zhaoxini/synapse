@@ -71,7 +71,7 @@ async function main() {
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(OUT, "02-repo-sessions.png"), fullPage: false });
 
-    await page.locator("#repoSessionList .sess-row").first().click();
+    await page.locator("#repoSessionList .sess-card").first().click();
     await page.waitForTimeout(500);
     await page.screenshot({ path: path.join(OUT, "03-chat.png"), fullPage: false });
 

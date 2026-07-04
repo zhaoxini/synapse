@@ -12,6 +12,10 @@ const issues = [];
 const ok = (msg) => console.log(`  ✓ ${msg}`);
 const fail = (msg) => { console.log(`  ✗ ${msg}`); issues.push(msg); };
 
+const suggestedCwds = ["/workspace/synapse", "/workspace/other"];
+const registeredProjects = Array.from({ length: 20 }, (_, i) => `/workspace/manual-${String(i + 1).padStart(2, "0")}`);
+registeredProjects.unshift("/workspace/manual-added");
+
 let sessions = [];
 
 function mockSessions() {
@@ -33,14 +37,15 @@ function startMockWs() {
         sessions,
         models: [{ id: "sonnet", label: "Sonnet" }],
         defaultModel: "sonnet",
-        cwds: ["/workspace/synapse", "/workspace/other"],
+        cwds: suggestedCwds,
+        registeredProjects,
       }));
       ws.on("message", (raw) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
         if (msg.op === "list" || msg.op === "refresh") {
           ws.send(JSON.stringify({ type: "sessions", sessions: mockSessions() }));
         } else if (msg.op === "refresh_cwds" || msg.op === "register_project") {
-          ws.send(JSON.stringify({ type: "cwds", cwds: ["/workspace/synapse", "/workspace/other"] }));
+          ws.send(JSON.stringify({ type: "cwds", cwds: suggestedCwds, registeredProjects }));
         } else if (msg.op === "history") {
           setTimeout(() => {
             ws.send(JSON.stringify({ type: "history", sessionId: msg.sessionId, events: [], found: true }));
@@ -105,6 +110,34 @@ async function main() {
     (await page.locator(".ws-row").count()) >= 1
       ? ok("Workspace rows rendered") : fail("Workspace rows missing");
 
+    {
+      const mainUi = await page.evaluate(() => ({
+        appH: document.getElementById("app")?.offsetHeight ?? 0,
+        vh: window.innerHeight,
+        dockH: document.getElementById("dockBar")?.offsetHeight ?? 0,
+        listH: document.getElementById("workspaceList")?.offsetHeight ?? 0,
+        dockBottomGap: (() => {
+          const app = document.getElementById("app")?.getBoundingClientRect();
+          const panel = document.getElementById("dockPanel")?.getBoundingClientRect();
+          return app && panel ? Math.round(app.bottom - panel.bottom) : 999;
+        })(),
+        registeredVisible: document.getElementById("workspaceList")?.innerText.includes("manual-added") ?? false,
+        suggestionVisible: document.getElementById("workspaceList")?.innerText.includes("other") ?? false,
+      }));
+      mainUi.appH >= mainUi.vh * 0.9
+        ? ok("App fills viewport") : fail(`App too short (${mainUi.appH}/${mainUi.vh})`);
+      mainUi.dockH > 40
+        ? ok("Bottom dock visible") : fail("Bottom dock missing");
+      mainUi.dockBottomGap <= 16
+        ? ok("Bottom dock stays inside app bottom") : fail(`Bottom dock gap too large (${mainUi.dockBottomGap}px)`);
+      mainUi.listH > 40
+        ? ok("Workspace list visible") : fail("Workspace list collapsed");
+      mainUi.registeredVisible
+        ? ok("Registered repo shown on workspace list") : fail("Registered repo missing from workspace list");
+      !mainUi.suggestionVisible
+        ? ok("Suggested-only repos hidden from workspace list") : fail("Suggested-only repo leaked into workspace list");
+    }
+
     !(await page.locator("#workspaceList .sess-row").count())
       ? ok("Sessions not inline on main list") : fail("Sessions should only appear on repo screen");
 
@@ -115,7 +148,7 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("screen-repo")))
       ? ok("Repo screen body class") : fail("Workspace tap should open repo screen");
 
-    (await page.locator("#repoSessionList .sess-row").count()) > 0
+    (await page.locator("#repoSessionList .sess-card").count()) > 0
       ? ok("Sessions shown on repo screen") : fail("Repo sessions missing");
 
     !(await page.locator("#repoSessionList .tree-new-row").count())
@@ -133,8 +166,57 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("screen-workspaces")))
       ? ok("+ stays on workspaces list") : fail("+ should not leave workspaces list");
     (await page.locator("#bottomSheet.show").count()) > 0
-      && (await page.locator("#sheetTitle").textContent()) === "Add workspace"
-      ? ok("+ opens add workspace sheet") : fail("+ should open add workspace sheet");
+      && (await page.locator("#sheetTitle").textContent()) === "Add Repository"
+      ? ok("+ opens add repository sheet") : fail("+ should open add repository sheet");
+
+    const addRepoUi = await page.evaluate(() => {
+      const app = document.getElementById("app")?.getBoundingClientRect();
+      const sheet = document.getElementById("bottomSheet")?.getBoundingClientRect();
+      const title = document.getElementById("sheetTitle");
+      const close = document.getElementById("sheetClose");
+      const handle = document.getElementById("sheetHandle");
+      const search = document.querySelector(".add-repo-search");
+      const ts = title ? getComputedStyle(title) : null;
+      const titleRect = title?.getBoundingClientRect();
+      const closeRect = close?.getBoundingClientRect();
+      return {
+        sheetHeight: document.getElementById("bottomSheet")?.offsetHeight ?? 0,
+        appLeft: app?.left ?? 0,
+        sheetLeft: sheet?.left ?? 0,
+        sheetWidth: sheet?.width ?? 0,
+        appWidth: app?.width ?? 0,
+        titleLeft: titleRect?.left ?? 0,
+        closeRight: closeRect?.right ?? 0,
+        sheetRight: sheet?.right ?? 0,
+        titleFontSize: ts?.fontSize ?? "",
+        titleFontWeight: ts?.fontWeight ?? "",
+        titleAlign: ts?.textAlign ?? "",
+        searchVisible: !!(search && search.offsetHeight > 10),
+        handleW: handle?.offsetWidth ?? 0,
+        handleH: handle?.offsetHeight ?? 0,
+        hasAddRepoMask: document.getElementById("sheetMask")?.classList.contains("sheet-add-repo-mask"),
+      };
+    });
+    addRepoUi.sheetHeight > 250
+      ? ok("Add repo sheet tall enough") : fail(`Add repo sheet collapsed (${addRepoUi.sheetHeight}px)`);
+    addRepoUi.titleLeft < (addRepoUi.closeRight - 40)
+      ? ok("Add repo title left of close") : fail("Add repo title/close layout wrong");
+    Math.abs(addRepoUi.closeRight - addRepoUi.sheetRight) < 24
+      ? ok("Add repo close aligned right") : fail("Add repo close not on right edge");
+    addRepoUi.titleFontSize === "17px" && Number(addRepoUi.titleFontWeight) >= 700
+      ? ok("Add repo title typography") : fail("Add repo title not 17px bold");
+    addRepoUi.titleAlign === "left"
+      ? ok("Add repo title left-aligned") : fail("Add repo title should be left-aligned");
+    addRepoUi.searchVisible
+      ? ok("Add repo search visible") : fail("Add repo search missing");
+    addRepoUi.handleW >= 38 && addRepoUi.handleH >= 4
+      ? ok("Add repo handle size") : fail("Add repo handle wrong size");
+    Math.abs(addRepoUi.sheetLeft - addRepoUi.appLeft) < 2
+      && Math.abs(addRepoUi.sheetWidth - addRepoUi.appWidth) < 2
+      ? ok("Add repo sheet within app frame") : fail("Add repo sheet not aligned to app frame");
+    addRepoUi.hasAddRepoMask
+      ? ok("Add repo light mask") : fail("Add repo mask class missing");
+
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
     await page.locator("#sheetClose").click();
@@ -156,17 +238,17 @@ async function main() {
     await page.locator(".ws-row").nth(1).click();
     await page.waitForTimeout(150);
 
-    (await page.locator(".sess-icon.spark").count()) > 0
-      ? ok("Working session sparkle icon") : fail("Sparkle icon missing");
+    (await page.locator(".sess-icon.running").count()) > 0
+      ? ok("Working session pulse dot") : fail("Running indicator missing");
 
-    (await page.locator(".sess-sub.working").count()) > 0
-      ? ok("Working status on busy session") : fail("Working status missing");
+    (await page.locator(".sess-sub.sess-branch .pulse-dot").count()) > 0
+      ? ok("Pulse on busy session branch row") : fail("Pulse dot missing");
 
-    (await page.locator(".sess-archive-btn").count()) > 0
-      ? ok("Inline archive button on rows") : fail("Archive button missing");
+    (await page.locator(".sess-card-archive").count()) > 0
+      ? ok("Swipe archive area on session cards") : fail("Archive swipe area missing");
 
     // chat + skeleton (use idle session)
-    await page.locator("#repoSessionList .sess-row").nth(1).click();
+    await page.locator("#repoSessionList .sess-card").nth(1).click();
     const loading = await page.evaluate(() => document.getElementById("scroller").classList.contains("history-loading"));
     loading ? ok("History loading indicator") : fail("History loading indicator missing");
     await page.waitForTimeout(300);
@@ -174,8 +256,13 @@ async function main() {
     (await page.evaluate(() => document.body.classList.contains("screen-chat")))
       ? ok("Switches to chat mode on session tap") : fail("Chat mode not activated");
 
-    (await page.locator("#composerControls").isVisible())
-      ? ok("Expanded composer in chat") : fail("Chat composer controls missing");
+    (await page.locator("#composerPanel").isVisible())
+      ? ok("Chat composer panel visible") : fail("Chat composer missing");
+
+    await page.locator("#composerCollapsedTap").click();
+    await page.waitForTimeout(150);
+    (await page.locator("#composerPanel.expanded").count()) > 0
+      ? ok("Chat composer expands on tap") : fail("Chat composer should expand");
 
     (await page.evaluate(() => {
       const btn = document.getElementById("attachBtn");
@@ -183,8 +270,27 @@ async function main() {
     })) <= 40
       ? ok("Attach button keeps compact size") : fail("Attach button stretched in composer");
 
-    const sendDisabled = await page.locator("#sendBtn").isDisabled();
-    sendDisabled ? ok("Send disabled when empty") : fail("Send should be disabled when empty");
+    await page.locator("#composerDim").click();
+    await page.waitForTimeout(100);
+
+    const sendDisabled = (await page.locator("#sendBtn").count()) > 0;
+    sendDisabled ? ok("Composer stop control in DOM") : fail("Stop button missing");
+
+    await page.locator("#backBtn").click();
+    await page.waitForTimeout(200);
+    (await page.evaluate(() => document.body.classList.contains("screen-repo")))
+      ? ok("Back on repo screen for dock test") : fail("Back should return to repo screen");
+    await page.locator("#dockCollapsedTap").click();
+    await page.waitForTimeout(150);
+    (await page.locator("#dockPanel.expanded").count()) > 0
+      ? ok("Bottom dock expands on tap") : fail("Dock should expand");
+    await page.locator("#dockDim").click();
+    await page.waitForTimeout(100);
+
+    await page.locator("#repoSessionList .sess-card").nth(1).click();
+    await page.waitForTimeout(300);
+    await page.locator("#composerCollapsedTap").click();
+    await page.waitForTimeout(150);
 
     await page.locator("#modelCtl").click();
     await page.waitForTimeout(150);

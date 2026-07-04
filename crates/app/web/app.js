@@ -45,9 +45,12 @@ const state = {
   models: [],          // model catalog from hello: [{id,label}]
   defaultModel: "",    // pre-selected model id for new sessions
   pendingModel: null,  // model chosen before a session exists; used on create
-  cwds: [],            // workspace paths from hello (git repos)
+  cwds: [],            // suggested git repos from Claude Code config
+  registeredProjects: [], // repos explicitly added in Synapse
   pendingCwd: null,    // workspace chosen for the next create
   pendingMode: null,   // permission mode chosen before a session exists
+  dockExpanded: false,
+  composerExpanded: false,
   pendingSend: null,   // message queued while a new session is being created
   blocks: [],         // rendered message elements (for empty/clear bookkeeping)
   // The current assistant turn. Synara model: a turn's thinking + tool calls are
@@ -67,6 +70,39 @@ const DEFAULT_RELAY_API = "https://zx0623.duckdns.org";
 
 function normalizePairCode(raw) {
   return (raw || "").trim().replace(/\D/g, "").slice(0, 6);
+}
+
+function pairingCodeFromUrl() {
+  let code = normalizePairCode(URL_PARAMS.get("code"));
+  if (code) return code;
+  // ?code%3D697056 → param name "code=697056", empty value
+  for (const [k, v] of URL_PARAMS.entries()) {
+    const key = decodeURIComponent(k);
+    if (!v && key.startsWith("code")) {
+      code = normalizePairCode(key.replace(/^code[=]?/i, ""));
+      if (code) return code;
+    }
+  }
+  const m = location.search.match(/[?&]code(?:%3D|=)(\d{6})/i);
+  if (m) return m[1];
+  return "";
+}
+
+function isLocalWebOrigin() {
+  const h = location.hostname;
+  return h === "127.0.0.1" || h === "localhost" || h === "::1";
+}
+
+function exchangeApiBases() {
+  const bases = [];
+  if (isLocalWebOrigin()) {
+    bases.push("http://127.0.0.1:4173");
+    if (location.port && location.port !== "4173") {
+      bases.push(`http://${location.hostname}:4173`);
+    }
+  }
+  bases.push(relayApiBase());
+  return [...new Set(bases)];
 }
 
 function relayApiBase() {
@@ -98,37 +134,53 @@ async function connectWithCode(code) {
     return false;
   }
   showPairError("");
+  showConnecting();
   const btn = $("pairCodeConnect");
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch(`${relayApiBase()}/api/v1/pairing-codes/exchange`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    if (!r.ok) {
-      let msg = r.statusText;
+    let resp = null;
+    let lastErr = "";
+    for (const base of exchangeApiBases()) {
       try {
-        const j = await r.json();
-        msg = j.error || j.message || msg;
-      } catch {}
-      throw new Error(msg);
+        const r = await fetch(`${base}/api/v1/pairing-codes/exchange`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+        if (r.ok) {
+          resp = await r.json();
+          break;
+        }
+        try {
+          const j = await r.json();
+          lastErr = j.error || j.message || r.statusText;
+        } catch {
+          lastErr = r.statusText;
+        }
+      } catch (e) {
+        lastErr = String(e.message || e);
+      }
     }
-    const resp = await r.json();
-    applyCreds({
+    if (!resp) throw new Error(lastErr || "Pairing failed");
+    beginConnect({
       host: resp.relay_host,
       port: String(resp.relay_port),
       token: resp.connect_token,
-      tls: resp.relay_tls,
-      path: "/connect",
-      deviceId: resp.device_id,
+      tls: !!resp.relay_tls,
+      path: resp.local ? "" : "/connect",
+      deviceId: resp.device_id || "",
     });
     return true;
   } catch (e) {
     const msg = String(e.message || e);
-    showPairError(/not found|invalid|expired|404/i.test(msg) ? "Invalid or expired pairing code" : msg);
-    resetConnectOverlay();
-    showConnectOverlay();
+    if (/not found|invalid|expired|404/i.test(msg)) {
+      showPairError("Invalid or expired pairing code");
+    } else if (/503|offline|unavailable/i.test(msg)) {
+      showPairError("Device offline — ensure synapse-server is running");
+    } else {
+      showPairError(msg);
+    }
+    failConnect();
     return false;
   } finally {
     if (btn) btn.disabled = false;
@@ -207,16 +259,19 @@ function splitHostPort(authority, tls) {
 
 function showConnectOverlay() {
   $("connectOverlay").classList.remove("hidden");
+  resetConnectOverlay();
   setPairingFieldsEnabled(true);
-  const code = normalizePairCode(URL_PARAMS.get("code"));
+  const code = pairingCodeFromUrl();
   if (code && $("pairCode")) $("pairCode").value = code;
 }
 
 function showConnecting() {
   const overlay = $("connectOverlay");
   const card = overlay?.querySelector(".connect-card");
-  const hint = overlay?.querySelector(".connect-hint");
-  if (hint) hint.textContent = "Connecting with pairing code…";
+  const status = $("connectStatus");
+  const statusText = $("connectStatusText");
+  if (statusText) statusText.textContent = "Connecting…";
+  status?.classList.remove("hidden");
   card?.classList.add("connecting");
   overlay?.classList.remove("hidden");
   setPairingFieldsEnabled(false);
@@ -225,14 +280,33 @@ function showConnecting() {
 function resetConnectOverlay() {
   const overlay = $("connectOverlay");
   const card = overlay?.querySelector(".connect-card");
-  const hint = overlay?.querySelector(".connect-hint");
-  if (hint) hint.textContent = "Enter the pairing code from synapse-server.";
+  $("connectStatus")?.classList.add("hidden");
   card?.classList.remove("connecting");
+  setPairingFieldsEnabled(true);
 }
 function hideConnectOverlay() {
   $("connectOverlay").classList.add("hidden");
   resetConnectOverlay();
-  setPairingFieldsEnabled(false);
+}
+
+function failConnect() {
+  clearCreds();
+  window.__SYNAPSE__ = null;
+  state.url = "";
+  resetConnectOverlay();
+  showConnectOverlay();
+}
+
+function beginConnect(c) {
+  window.__SYNAPSE__ = c;
+  state.url = buildUrl(c);
+  state.backoff = 1000;
+  doConnect(true);
+}
+
+function applyCreds(c) {
+  beginConnect(c);
+  // persist + hide overlay only after WS opens (doConnect onopen)
 }
 
 const PAIRING_FIELD_IDS = ["pairLink", "pairHost", "pairPort", "pairToken", "pairCode"];
@@ -247,16 +321,8 @@ function setPairingFieldsEnabled(on) {
   }
 }
 
-function applyCreds(c) {
-  window.__SYNAPSE__ = c;
-  persistCreds(c);
-  hideConnectOverlay();
-  state.url = buildUrl(c);
-  state.backoff = 1000;
-  doConnect(true);
-}
-
 function pairFromForm() {
+  showConnecting();
   const link = ($("pairLink").value || "").trim();
   if (link) {
     const c = parsePairLink(link);
@@ -319,9 +385,9 @@ function doConnect(first) {
   state.ws.onclose = () => {
     state.connected = false;
     if (first) {
-      toast("Could not connect — check link and server");
-      resetConnectOverlay();
-      showConnectOverlay();
+      failConnect();
+      showPairError("Could not connect — check that synapse-server is running");
+      toast("Could not connect — check that synapse-server is running");
     } else {
       $("reconnect").classList.add("show");
       scheduleReconnect(false);
@@ -350,6 +416,7 @@ function handle(v) {
       state.models = v.models || [];
       state.defaultModel = v.defaultModel || "";
       state.cwds = v.cwds || [];
+      state.registeredProjects = v.registeredProjects || [];
       setSessions(v.sessions || []);
       syncModelLabel();
       syncLocalLabel();
@@ -370,6 +437,7 @@ function handle(v) {
     case "sessions": break;
     case "cwds":
       state.cwds = v.cwds || [];
+      state.registeredProjects = v.registeredProjects || state.registeredProjects;
       if (state.screen === "workspaces" || state.screen === "repo") refreshLists();
       break;
     case "history":
@@ -960,12 +1028,15 @@ function openSheet(title, content) {
   $("sheetMask").classList.add("show");
   $("bottomSheet").classList.add("show");
   $("bottomSheet").style.transform = "";
+  $("composerDim")?.classList.remove("show");
 }
 function closeSheet() {
   $("sheetMask").classList.remove("show");
+  $("sheetMask").classList.remove("sheet-add-repo-mask");
   $("bottomSheet").classList.remove("show");
   $("bottomSheet").classList.remove("dragging");
   $("bottomSheet").classList.remove("sheet-picker");
+  $("bottomSheet").classList.remove("sheet-add-repo");
   $("bottomSheet").style.transform = "";
 }
 function openThinkingSheet(text, secs) {
@@ -1088,6 +1159,28 @@ function openModelSheet() {
   $("bottomSheet").classList.add("sheet-picker");
   openSheet("Model", wrap);
   requestAnimationFrame(() => search.focus());
+}
+
+function openModeSheet() {
+  closeMenus();
+  const cur = currentMode();
+  const wrap = document.createElement("div");
+  const card = document.createElement("div");
+  card.className = "mode-card";
+  for (const m of MODE_UI) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "mode-row" + (m.id === cur ? " sel" : "");
+    row.innerHTML =
+      `<span class="mode-row-body"><p class="mode-row-label">${escapeHtml(m.label)}</p>` +
+      `<p class="mode-row-desc">${escapeHtml(m.desc)}</p></span>` +
+      (m.id === cur ? `<span class="mode-row-check">✓</span>` : "");
+    row.addEventListener("click", () => { chooseMode(m.id); closeSheet(); });
+    card.appendChild(row);
+  }
+  wrap.appendChild(card);
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Mode", wrap);
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -1381,18 +1474,33 @@ function permBtn(label, cls, on) {
 }
 
 // =================== permission-mode pill (composer) ===================
-const PERM_MODES = [
-  { id: "default", label: "Ask" },
-  { id: "acceptEdits", label: "Auto-edit" },
-  { id: "plan", label: "Plan" },
-  { id: "bypassPermissions", label: "Yolo" },
+const MODE_UI = [
+  { id: "default", label: "Auto", desc: "Claude decides when to ask for permission" },
+  { id: "plan", label: "Plan", desc: "Review plan before any changes are made" },
+  { id: "bypassPermissions", label: "Bypass", desc: "Skip all permission prompts" },
 ];
-function permLabelFor(mode) { const m = PERM_MODES.find(x => x.id === mode); return m ? m.label : (mode || "Ask"); }
+const PERM_MODES = [
+  { id: "default", label: "Auto" },
+  { id: "plan", label: "Plan" },
+  { id: "bypassPermissions", label: "Bypass" },
+  { id: "acceptEdits", label: "Auto-edit" },
+];
+function permLabelFor(mode) {
+  const m = MODE_UI.find(x => x.id === mode) || PERM_MODES.find(x => x.id === mode);
+  return m ? m.label : (mode || "Auto");
+}
+function modeUILabel(mode) { return permLabelFor(mode); }
 function currentMode() {
   const s = state.sessions.find(x => x.id === state.activeId);
   return (s ? s.permission_mode : state.pendingMode) || "default";
 }
-function syncPermLabel() { /* permission mode shown in attach menu */ }
+function syncPermLabel() {
+  const label = modeUILabel(currentMode());
+  for (const id of ["modeLabel", "dockModeLabel"]) {
+    const el = $(id);
+    if (el) el.textContent = label;
+  }
+}
 function chooseMode(mode) {
   closeMenus();
   if (state.activeId) {
@@ -1437,6 +1545,7 @@ function openAttachMenu() {
     window.__SYNAPSE__ = null;
     showConnectOverlay();
   });
+  menu.classList.remove("hidden");
   menu.classList.add("show");
 }
 
@@ -1523,8 +1632,8 @@ function fmtElapsed(secs) {
 }
 
 // =================== rendering primitives ===================
-// Synara style: assistant blocks are full-width with no avatar; user messages
-// are right-aligned compact bubbles. No avatar column at all.
+// Synara style: assistant blocks are full-width; user messages are flat rows
+// with bottom borders (Figma Make — no bubbles).
 function mkMsg(role) {
   const el = document.createElement("div");
   el.className = "msg " + (role === "user" ? "user" : "assistant");
@@ -1665,10 +1774,10 @@ function echoUser(text, mid) {
   }
   const el = document.createElement("div");
   el.className = "msg user";
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-  el.appendChild(bubble);
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = text;
+  el.appendChild(body);
   state.blocks.push({ el, role: "user", mid });
   messagesEl.appendChild(el);
   emptyEl.classList.add("hidden");
@@ -1908,8 +2017,8 @@ function workspacePaths() {
     const n = normalizePath(s.cwd);
     if (n) paths.add(n);
   }
-  // Also show registered workspaces that have no sessions yet.
-  for (const p of state.cwds || []) {
+  // Also show repos explicitly added in Synapse that have no sessions yet.
+  for (const p of state.registeredProjects || []) {
     const n = normalizePath(p);
     if (n) paths.add(n);
   }
@@ -1947,13 +2056,17 @@ function showScreen(name) {
   if (name === "workspaces") {
     state.view = "workspaces";
     state.activeRepo = null;
+    collapseDock();
     updateChrome();
     renderWorkspaceList();
   } else if (name === "repo") {
     state.view = "workspaces";
+    collapseDock();
     renderRepoSessionList();
+    updateChrome();
   } else if (name === "chat") {
     state.view = "chat";
+    collapseDock();
     updateChrome();
   }
 }
@@ -1967,13 +2080,16 @@ function renderRepoSessionList() {
 
   const pending = normalizePath(state.pendingCwd);
   if (state.creating && path !== "all" && pending === normalizePath(path)) {
-    const row = document.createElement("div");
-    row.className = "sess-row creating";
-    row.innerHTML =
-      `<span class="sess-icon dot"></span>` +
+    const wrap = document.createElement("div");
+    wrap.className = "sess-card-wrap";
+    const card = document.createElement("div");
+    card.className = "sess-card creating";
+    card.innerHTML =
+      `<span class="sess-icon running"></span>` +
       `<div class="sess-body"><div class="sess-title">Creating session…</div>` +
-      `<div class="sess-sub working">Working</div></div>`;
-    body.appendChild(row);
+      `<div class="sess-sub sess-branch"><span class="branch-ic"></span><span>Working</span><span class="pulse-dot"></span></div></div>`;
+    wrap.appendChild(card);
+    body.appendChild(wrap);
   }
 
   const sessions = filteredSessions(workspaceFilter);
@@ -1984,7 +2100,7 @@ function renderRepoSessionList() {
     body.appendChild(hint);
     return;
   }
-  for (const s of sessions) appendSessionRow(body, s, true);
+  for (const s of sessions) appendSessionRow(body, s);
 }
 
 function renderSessionDrawerBody(path) {
@@ -2027,48 +2143,203 @@ function filteredSessions(workspacePath) {
     });
 }
 
+const ARCHIVE_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9.5 3h5M3 7h18M5 7l1 14h12l1-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M10 11v5M14 11v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+
+function inferBranch(/* cwd */) { return "master"; }
+
+function dockCwd() {
+  if (state.activeRepo && state.activeRepo !== "all") return state.activeRepo;
+  return workspacePaths()[0] || "";
+}
+
+function updateBranchLabels() {
+  const dockLbl = $("dockBranchLabel");
+  if (dockLbl) {
+    const cwd = dockCwd();
+    dockLbl.textContent = `${basename(cwd) || "synapse"} ${inferBranch(cwd)}`;
+  }
+  const compLbl = $("composerBranchLabel");
+  if (compLbl) {
+    const s = state.sessions.find(x => x.id === state.activeId);
+    const cwd = s ? s.cwd : state.pendingCwd;
+    compLbl.textContent = `${basename(cwd || "") || "synapse"} ${inferBranch(cwd)}`;
+  }
+  const rb = $("repoBranch");
+  if (rb) {
+    if (state.screen === "repo" && state.activeRepo && state.activeRepo !== "all") {
+      rb.innerHTML = `<span class="branch-ic" aria-hidden="true"></span>${escapeHtml(inferBranch(state.activeRepo))}`;
+      rb.classList.remove("hidden");
+    } else rb.classList.add("hidden");
+  }
+  const cb = $("chatBranch");
+  if (cb) {
+    if (state.screen === "chat" || state.view === "chat") {
+      const s = state.sessions.find(x => x.id === state.activeId);
+      const cwd = s ? s.cwd : state.pendingCwd;
+      const repo = basename(cwd || "") || "synapse";
+      const pulse = s && s.state === "busy" ? `<span class="pulse-dot"></span>` : "";
+      cb.innerHTML = `<span class="branch-ic" aria-hidden="true"></span>${escapeHtml(repo)} ${escapeHtml(inferBranch(cwd))}${pulse}`;
+      cb.classList.remove("hidden");
+    } else cb.classList.add("hidden");
+  }
+}
+
+function setDockExpanded(on) {
+  state.dockExpanded = !!on;
+  const panel = $("dockPanel");
+  const dim = $("dockDim");
+  if (panel) panel.classList.toggle("expanded", state.dockExpanded);
+  if (dim) {
+    dim.classList.toggle("show", state.dockExpanded);
+    dim.classList.toggle("hidden", !state.dockExpanded);
+  }
+  if (state.dockExpanded) {
+    updateBranchLabels();
+    syncModelLabel();
+    syncPermLabel();
+    requestAnimationFrame(() => $("dockInput")?.focus());
+  } else {
+    const di = $("dockInput");
+    if (di) di.value = "";
+    $("dockAttachMenu")?.classList.add("hidden");
+  }
+}
+
+function expandDock() { setDockExpanded(true); haptic("light"); }
+function collapseDock() { setDockExpanded(false); }
+
+function setComposerExpanded(on) {
+  state.composerExpanded = !!on;
+  const panel = $("composerPanel");
+  const dim = $("composerDim");
+  if (panel && !state.busy) panel.classList.toggle("expanded", state.composerExpanded);
+  if (dim) {
+    dim.classList.toggle("show", state.composerExpanded && !state.busy);
+    dim.classList.toggle("hidden", !state.composerExpanded || state.busy);
+  }
+  if (state.composerExpanded && !state.busy) {
+    updateBranchLabels();
+    requestAnimationFrame(() => inputEl?.focus());
+  }
+}
+
+function expandComposer() { if (!state.busy) { setComposerExpanded(true); haptic("light"); } }
+function collapseComposer() { setComposerExpanded(false); }
+
+function submitFromDock() {
+  const di = $("dockInput");
+  const text = (di?.value || "").trim();
+  if (!text) return;
+  collapseDock();
+  if (di) di.value = "";
+  state.pendingSend = text;
+  startNewDraft(dockCwd() || undefined, { keepPending: true });
+}
+
+function submitFromComposer() {
+  doSend();
+  collapseComposer();
+}
+
 const SPARK_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2.5l1.6 3.8L17.5 8l-3.9 1.7L12 13.5 10.4 9.7 6.5 8l3.9-1.7L12 2.5z" fill="currentColor"/><circle cx="5.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="18.5" cy="18" r="1.5" fill="currentColor" opacity=".75"/><circle cx="12" cy="21" r="1.5" fill="currentColor" opacity=".75"/></svg>`;
-const ARCHIVE_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M4 6h12v10a1 1 0 01-1 1H5a1 1 0 01-1-1V6z" stroke="currentColor" stroke-width="1.4"/><path d="M3 6h14M8 6V4h4v2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M8 10h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`;
 
 function formatNum(n) {
   return (n || 0).toLocaleString("en-US");
 }
 
-function sessionIconHtml(s) {
-  if (s.state === "busy") return `<span class="sess-icon spark">${SPARK_SVG}</span>`;
-  return `<span class="sess-icon dot"></span>`;
+function sessionDotClass(s) {
+  if (s.state === "busy") return "running";
+  if (s.state === "error") return "idle";
+  return "dot";
 }
 
-function appendSessionRow(parent, s, inGlassCard) {
+function sessionSubtitle(s) {
+  const branch = inferBranch(s.cwd);
+  const pulse = s.state === "busy" ? `<span class="pulse-dot"></span>` : "";
+  return {
+    text: "", cls: "sess-branch",
+    html: `<span class="branch-ic" aria-hidden="true"></span><span>${escapeHtml(branch)}</span>${pulse}`,
+  };
+}
+
+function bindSwipeArchive(wrap, card, onArchive) {
+  const REVEAL = 80;
+  let startX = 0, dragging = false, revealed = false, curX = 0;
+
+  const snap = (open) => {
+    revealed = open;
+    curX = open ? -REVEAL : 0;
+    card.style.transform = `translateX(${curX}px)`;
+    card.classList.toggle("dragging", false);
+  };
+
+  card.addEventListener("touchstart", (e) => {
+    if (e.target.closest(".sess-card-archive-btn")) return;
+    startX = e.touches[0].clientX;
+    dragging = true;
+    card.classList.add("dragging");
+  }, { passive: true });
+
+  card.addEventListener("touchmove", (e) => {
+    if (!dragging) return;
+    const dx = e.touches[0].clientX - startX;
+    curX = Math.min(0, Math.max(-REVEAL, revealed ? -REVEAL + dx : dx));
+    card.style.transform = `translateX(${curX}px)`;
+  }, { passive: true });
+
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (curX < -40) snap(true);
+    else snap(false);
+  };
+  card.addEventListener("touchend", endDrag);
+  card.addEventListener("touchcancel", endDrag);
+
+  wrap.querySelector(".sess-card-archive-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onArchive();
+    haptic("medium");
+  });
+}
+
+function appendSessionRow(parent, s) {
   const wrap = document.createElement("div");
-  wrap.className = inGlassCard ? "sess-row-wrap" : "sess-row-wrap";
-  const row = document.createElement("div");
-  row.className = "sess-row" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
-  const sub = sessionSubtitle(s);
-  const subHtml = sub.html
-    ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>`
-    : (sub.text ? `<div class="sess-sub ${sub.cls}">${escapeHtml(sub.text)}</div>` : "");
+  wrap.className = "sess-card-wrap";
+
+  const archive = document.createElement("div");
+  archive.className = "sess-card-archive";
+  archive.innerHTML = `<button type="button" class="sess-card-archive-btn" aria-label="Archive">${ARCHIVE_SVG}<span>Archive</span></button>`;
+
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "sess-card" + (s.id === state.activeId ? " active" : "") + (s.pinned ? " pinned" : "");
   const pin = s.pinned ? `<span class="sess-pin" aria-label="Pinned">★</span>` : "";
-  const icon = s.state === "busy"
-    ? `<span class="sess-icon spark">${SPARK_SVG.replace('width="22"', 'width="14"').replace('height="22"', 'height="14"')}</span>`
-    : `<span class="sess-icon dot"></span>`;
+  const sub = sessionSubtitle(s);
+  const subHtml = sub.html ? `<div class="sess-sub ${sub.cls}">${sub.html}</div>` : "";
+  const icon = `<span class="sess-icon ${sessionDotClass(s)}"></span>`;
   const time = relTime(s.started_at || 0);
-  row.innerHTML =
+  card.innerHTML =
     icon +
     `<div class="sess-body">` +
       `<div class="sess-title">${pin}${escapeHtml(cleanTitle(s.name))}</div>` +
       subHtml +
     `</div>` +
-    `<div class="sess-row-meta"><span class="sess-time">${escapeHtml(time)}</span>${CHEV_SVG}</div>` +
-    `<button type="button" class="sess-archive-btn" aria-label="Archive">${ARCHIVE_SVG}</button>`;
-  wrap.appendChild(row);
+    `<div class="sess-row-meta"><span class="sess-time">${escapeHtml(time)}</span>${CHEV_SVG}</div>`;
+
+  wrap.appendChild(archive);
+  wrap.appendChild(card);
   parent.appendChild(wrap);
-  row.addEventListener("click", (e) => {
-    if (e.target.closest(".sess-archive-btn")) return;
+
+  bindSwipeArchive(wrap, card, () => send({ op: "archive", sessionId: s.id }));
+  card.addEventListener("click", (e) => {
+    if (card.style.transform && card.style.transform.includes("-")) {
+      const tx = parseFloat(card.style.transform.replace(/[^-\d.]/g, "") || "0");
+      if (tx < -20) { card.style.transform = ""; return; }
+    }
     select(s.id);
   });
-  bindArchiveBtn(row.querySelector(".sess-archive-btn"), s);
-  bindLongPress(row, s);
+  bindLongPress(card, s);
 }
 
 function renderWorkspaceList() {
@@ -2213,12 +2484,94 @@ function openWorkspacePickerSheet(onPick) {
 }
 
 function openAddWorkspace() {
-  openWorkspacePickerSheet((path) => {
+  closeMenus();
+  collapseDock();
+  const wrap = document.createElement("div");
+  wrap.className = "add-repo-sheet";
+
+  let selected = null;
+  const searchWrap = document.createElement("div");
+  searchWrap.className = "add-repo-search";
+  searchWrap.innerHTML = `<svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="#8C8C8E" stroke-width="1.6"/><path d="M13.5 13.5L17 17" stroke="#8C8C8E" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+  const inp = document.createElement("input");
+  inp.type = "search";
+  inp.placeholder = "Search or enter repo URL…";
+  inp.autocomplete = "off";
+  searchWrap.appendChild(inp);
+  wrap.appendChild(searchWrap);
+
+  const section = document.createElement("p");
+  section.className = "add-repo-section";
+  section.textContent = "Suggested";
+  wrap.appendChild(section);
+
+  const list = document.createElement("div");
+  list.className = "add-repo-list";
+  wrap.appendChild(list);
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "add-repo-btn";
+  addBtn.textContent = "Add Repo";
+  wrap.appendChild(addBtn);
+
+  const syncBtn = () => {
+    const ok = !!(selected || inp.value.trim());
+    addBtn.classList.toggle("active", ok);
+  };
+
+  const render = () => {
+    list.innerHTML = "";
+    const q = inp.value.trim().toLowerCase();
+    section.textContent = q ? "Results" : "Suggested";
+    const items = (state.cwds || []).filter((p) => {
+      const b = basename(p).toLowerCase();
+      return !q || b.includes(q) || String(p).toLowerCase().includes(q);
+    });
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-hint";
+      empty.style.padding = "20px 16px";
+      empty.textContent = q ? "No repos found" : "No workspaces yet";
+      list.appendChild(empty);
+      syncBtn();
+      return;
+    }
+    for (const p of items) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "add-repo-row" + (selected === p ? " sel" : "");
+      row.innerHTML =
+        `<span class="add-repo-icon"><span class="branch-ic"></span></span>` +
+        `<span class="add-repo-meta"><span class="add-repo-name">${escapeHtml(basename(p))}</span>` +
+        `<span class="add-repo-sub">${escapeHtml(p)}</span></span>` +
+        (selected === p ? `<span class="add-repo-check">✓</span>` : "");
+      row.addEventListener("click", () => {
+        selected = selected === p ? null : p;
+        render();
+      });
+      list.appendChild(row);
+    }
+    syncBtn();
+  };
+
+  inp.addEventListener("input", () => { selected = null; render(); });
+  addBtn.addEventListener("click", () => {
+    const path = selected || inp.value.trim();
+    if (!path) return;
+    closeSheet();
     const norm = normalizePath(path);
     state.pendingCwd = norm;
     send({ op: "register_project", path: norm });
     refreshLists();
+    haptic("light");
   });
+
+  render("");
+  $("sheetMask").classList.add("sheet-add-repo-mask");
+  $("bottomSheet").classList.add("sheet-add-repo");
+  openSheet("Add Repository", wrap);
+  requestAnimationFrame(() => inp.focus());
 }
 
 function diffSubtitle(s) {
@@ -2229,23 +2582,6 @@ function diffSubtitle(s) {
   if (a) html += `<span class="sess-diff add">+${formatNum(a)}</span>`;
   if (d) html += (html ? " " : "") + `<span class="sess-diff del">−${formatNum(d)}</span>`;
   return html;
-}
-
-function sessionSubtitle(s) {
-  if (s.state === "busy") return { text: "Working", cls: "working", html: "" };
-  if (s.state === "error") {
-    const diff = diffSubtitle(s);
-    const err = `<span class="fail-mark">✗</span> 1 Check Failed`;
-    const html = diff ? `${err} · ${diff}` : err;
-    return { text: "", cls: "error", html };
-  }
-  const diff = diffSubtitle(s);
-  const t = s.started_at || 0;
-  const time = t ? relTime(t) : "";
-  if (diff && time) return { text: "", cls: "", html: `${diff} · ${escapeHtml(time)}` };
-  if (diff) return { text: "", cls: "", html: diff };
-  if (!diff) return { text: "No Changes", cls: "muted", html: "" };
-  return { text: "", cls: "", html: "" };
 }
 
 let navFromPop = false;
@@ -2268,10 +2604,14 @@ function updateChrome() {
   searchWrap.classList.toggle("hidden", !state.searchOpen);
   const searchBtn = $("searchBtn");
   if (searchBtn) searchBtn.classList.toggle("active", state.searchOpen);
+  updateBranchLabels();
   if (state.screen === "chat" || state.view === "chat") {
     const s = state.sessions.find(x => x.id === state.activeId);
     if (chatTitle) chatTitle.textContent = s ? cleanTitle(s.name) : "New session";
     if (inputEl) inputEl.placeholder = "Follow up…";
+    const panel = $("composerPanel");
+    if (panel) panel.classList.toggle("running", !!state.busy);
+    if (state.busy) collapseComposer();
   }
 }
 
@@ -2334,27 +2674,20 @@ function autoGrow() {
   updateSend();
 }
 function updateSend() {
-  const has = inputEl.value.trim().length > 0;
-  sendBtn.classList.remove("active", "busy");
-  if (state.busy) {
-    sendBtn.classList.add("busy");
-    sendBtn.disabled = false;
-  } else if (has) {
-    sendBtn.classList.add("active");
-    sendBtn.disabled = false;
-  } else {
-    sendBtn.disabled = true;
-  }
+  const panel = $("composerPanel");
+  if (panel) panel.classList.toggle("running", !!state.busy);
+  if (sendBtn) sendBtn.classList.toggle("busy", !!state.busy);
 }
 inputEl.addEventListener("input", autoGrow);
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault(); doSend();
+    e.preventDefault();
+    doSend();
+    collapseComposer();
   }
 });
 sendBtn.addEventListener("click", () => {
   if (state.busy) { send({ op: "stop", sessionId: state.activeId }); haptic("medium"); return; }
-  doSend();
 });
 function doSend() {
   const text = inputEl.value.trim();
@@ -2383,15 +2716,38 @@ $("backBtn").addEventListener("click", () => {
   }
 });
 $("repoBackBtn")?.addEventListener("click", () => { haptic("light"); showWorkspaces(); });
-$("repoNewBtn")?.addEventListener("click", () => {
-  haptic("light");
-  const cwd = state.activeRepo === "all" ? workspacePaths()[0] : state.activeRepo;
-  startNewDraft(cwd || undefined);
+$("repoNewBtn")?.addEventListener("click", () => { haptic("light"); expandDock(); });
+$("dockCollapsedTap")?.addEventListener("click", () => expandDock());
+$("dockDim")?.addEventListener("click", () => collapseDock());
+$("dockInput")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitFromDock(); }
 });
-$("dockExpand")?.addEventListener("click", () => {
-  haptic("light");
-  const cwd = state.activeRepo && state.activeRepo !== "all" ? state.activeRepo : workspacePaths()[0];
-  startNewDraft(cwd || undefined);
+$("dockModelCtl")?.addEventListener("click", (e) => { e.stopPropagation(); openModelSheet(); });
+$("dockModeCtl")?.addEventListener("click", (e) => { e.stopPropagation(); openModeSheet(); });
+$("dockAttachBtn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = $("dockAttachMenu");
+  if (!menu) return;
+  const open = !menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", open);
+  if (!open) {
+    menu.innerHTML = "";
+    for (const item of [{ icon: "🖼", label: "Photo" }, { icon: "📄", label: "Files" }]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
+      b.addEventListener("click", () => menu.classList.add("hidden"));
+      menu.appendChild(b);
+    }
+  }
+});
+$("composerCollapsedTap")?.addEventListener("click", () => expandComposer());
+$("composerDim")?.addEventListener("click", () => collapseComposer());
+$("modeCtl")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = $("bottomSheet").classList.contains("show") && $("sheetTitle").textContent === "Mode";
+  if (open) closeSheet();
+  else openModeSheet();
 });
 window.addEventListener("popstate", () => {
   if (state.screen === "chat" || state.view === "chat") {
@@ -2417,16 +2773,17 @@ $("archivedToggle").addEventListener("click", () => {
   refreshLists();
 });
 
-function startNewDraft(cwd) {
+function startNewDraft(cwd, opts = {}) {
   if (state.creating) return;
   state.activeId = "";
-  state.pendingSend = null;
+  if (!opts.keepPending) state.pendingSend = null;
   if (cwd !== undefined) state.pendingCwd = normalizePath(cwd);
   clearMessages();
   state.turn = null;
   setBusy(false);
   syncModelLabel();
   syncLocalLabel();
+  syncPermLabel();
   const es = $("emptySub");
   if (es) {
     const c = state.pendingCwd || workspacePaths()[0];
@@ -2434,6 +2791,7 @@ function startNewDraft(cwd) {
   }
   showChat();
   haptic("light");
+  if (opts.keepPending && state.pendingSend) newSession();
 }
 
 function newSession() {
@@ -2478,9 +2836,12 @@ function currentCwd() {
   return (s ? s.cwd : state.pendingCwd) || "";
 }
 function syncModelLabel() {
-  const ml = $("modelLabel");
   const id = currentModelId();
-  if (ml) ml.textContent = id ? labelForModel(id) : "Auto";
+  const text = id ? labelForModel(id) : "Auto";
+  for (const elId of ["modelLabel", "dockModelLabel"]) {
+    const ml = $(elId);
+    if (ml) ml.textContent = text;
+  }
 }
 function syncLocalLabel() {
   const ll = $("localLabel"); const c = currentCwd();
@@ -2488,8 +2849,9 @@ function syncLocalLabel() {
 }
 function closeMenus() {
   $("localMenu").classList.remove("show");
-  const am = $("attachMenu"); if (am) am.classList.remove("show");
+  const am = $("attachMenu"); if (am) { am.classList.add("hidden"); am.classList.remove("show"); }
   const pm = $("permMenu"); if (pm) pm.classList.remove("show");
+  $("dockAttachMenu")?.classList.add("hidden");
 }
 // Render `items` ([{id,label,title?}]) into menu `id`, marking `cur` selected.
 function openMenu(id, items, cur, onPick, emptyMsg) {
@@ -2610,6 +2972,8 @@ initPullRefresh();
 initSheetDrag();
 if (creds()) hideConnectOverlay();
 updateSend();
+syncPermLabel();
+syncModelLabel();
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheetMask").addEventListener("click", closeSheet);
 $("pairCodeConnect")?.addEventListener("click", () => connectWithCode());
@@ -2617,7 +2981,7 @@ $("pairCode")?.addEventListener("keydown", (e) => { if (e.key === "Enter") conne
 $("pairManualConnect")?.addEventListener("click", pairFromForm);
 window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
 (async () => {
-  const urlCode = normalizePairCode(URL_PARAMS.get("code"));
+  const urlCode = pairingCodeFromUrl();
   // ?code= in the URL always wins over saved creds — that's the share link contract.
   if (urlCode) {
     clearCreds();
@@ -2697,7 +3061,7 @@ function initSheetDrag() {
   const onMove = (y) => {
     if (!dragging) return;
     curY = Math.max(0, y - startY);
-    sheet.style.transform = `translateY(${curY}px)`;
+    sheet.style.transform = `translateX(-50%) translateY(${curY}px)`;
     const op = Math.max(0, 1 - curY / 280);
     $("sheetMask").style.opacity = String(op * 0.55);
   };
