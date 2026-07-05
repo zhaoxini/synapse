@@ -49,11 +49,11 @@ enum Commands {
     /// Log in and register this machine with the Synapse relay.
     Login {
         #[arg(long)]
-        relay: String,
+        relay: Option<String>,
         #[arg(long)]
-        email: String,
+        email: Option<String>,
         #[arg(long)]
-        password: String,
+        password: Option<String>,
         #[arg(long)]
         device_name: Option<String>,
     },
@@ -169,32 +169,37 @@ async fn main() -> Result<()> {
             password,
             device_name,
         }) => {
+            let relay = account::resolve_relay_arg(relay)?;
+            let email = account::resolve_email_arg(email)?;
+            let password = account::resolve_password_arg(password)?;
             let device_name = device_name.unwrap_or_else(account::default_device_name);
-            let cfg = account::login_account(&relay, &email, &password, &device_name).await?;
+            let cfg = account::sign_in_or_register(&relay, &email, &password, &device_name).await?;
             cfg.save()?;
+            let code = account::load_or_create_pairing_code(true)?;
+            if let Err(e) = account::register_pairing_code(&cfg, &code).await {
+                tracing::warn!("pairing code registration failed: {e}");
+            }
             println!("\n  Logged in and device registered.\n");
             println!("  Email:       {}", cfg.user_email);
             println!("  Device:      {} ({})", cfg.device_name, cfg.device_id);
+            println!("  Pairing:     {}", code);
             println!("  Config:      {}", account::Config::path().display());
             println!("\n  Run: synapse-server\n");
             Ok(())
         }
         Some(Commands::PairingCode) => {
             let cfg =
-                account::Config::load()?.context("not signed in — run synapse-server first")?;
-            if let Some(code) = account::load_pairing_code() {
-                println!("\n  Pairing code:  {}\n", code);
-                println!("  Valid while synapse-server is running.\n");
-                println!("  Web: http://127.0.0.1:8000/?code={code}\n",);
-                return Ok(());
+                account::Config::load()?.context("not signed in — run synapse-server login")?;
+            let code = account::load_or_create_pairing_code(false)?;
+            match account::register_pairing_code(&cfg, &code).await {
+                Ok(resp) => println!("\n  Pairing code:  {}\n", resp.code),
+                Err(e) => {
+                    tracing::warn!("pairing code registration failed: {e}");
+                    println!("\n  Pairing code:  {}\n", code);
+                }
             }
-            let code = account::create_pairing_code(&cfg).await?;
-            println!("\n  Pairing code:  {}\n", code.code);
-            println!("  Valid while synapse-server is running.\n");
-            println!(
-                "  Enter this code in the Synapse app (same account: {}).\n",
-                cfg.user_email
-            );
+            println!("  Stable until you log in again.");
+            println!("  Web: http://127.0.0.1:8000/?code={code}\n");
             Ok(())
         }
         Some(Commands::Status) => {
@@ -237,14 +242,13 @@ async fn run_server(args: RunArgs) -> Result<()> {
         if let Some(cfg) = &saved {
             println!("  Signed in as:   {}", cfg.user_email);
             println!("  This machine:   {}", cfg.device_name);
-            if let Ok(code) = account::create_pairing_code(cfg).await {
-                println!("\n  ┌─────────────────────────────────────┐");
-                println!("  │  Pairing code:  {:>6}               │", code.code);
-                println!("  └─────────────────────────────────────┘");
-                println!("\n  Web:  http://127.0.0.1:8000/?code={}", code.code);
-                println!("  (code stays valid while this server is running)\n");
-                account::spawn_pairing_refresh(cfg.clone());
-            }
+            let code = account::load_or_create_pairing_code(false)?;
+            println!("\n  ┌─────────────────────────────────────┐");
+            println!("  │  Pairing code:  {:>6}               │", code);
+            println!("  └─────────────────────────────────────┘");
+            println!("\n  Web:  http://127.0.0.1:8000/?code={code}");
+            println!("  (code stays stable until you log in again)\n");
+            account::spawn_pairing_registration(cfg.clone(), code);
         }
     } else {
         println!("  Pairing token:  {token}");
@@ -328,12 +332,7 @@ async fn run_server(args: RunArgs) -> Result<()> {
 
     tail::spawn(manager.clone());
 
-    tokio::spawn(async move {
-        match manager.sync_managed().await {
-            n if n > 0 => println!("  Attached {n} existing Claude Code session(s)."),
-            _ => {}
-        }
-    });
+    // Existing Claude Code sessions are imported explicitly from a workspace screen.
 
     // Account + relay mode only needs localhost; avoids clashing with other LAN services.
     let bind_host = if saved.is_some() && args.host == "0.0.0.0" {

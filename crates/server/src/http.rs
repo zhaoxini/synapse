@@ -206,6 +206,8 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                             cwd: None,
                             name: None,
                             model: None,
+                            effort: None,
+                            thinking: None,
                             permission_mode: None,
                             agent: None,
                         });
@@ -250,7 +252,6 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                 }
             }
             "refresh" => {
-                state.manager.sync_managed().await;
                 let list = state.manager.list().await;
                 let _ = out_tx
                     .send(Message::Text(
@@ -309,6 +310,42 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                     let _ = out_tx
                         .send(Message::Text(
                             json!({"type":"error","error":e,"op":"set_model"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "set_effort" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let effort = cmd
+                    .get("effort")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                if let Err(e) = state.manager.set_effort(&sid, effort).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"set_effort"}).to_string(),
+                        ))
+                        .await;
+                }
+            }
+            "set_thinking" => {
+                let sid = cmd
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let thinking = cmd
+                    .get("thinking")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                if let Err(e) = state.manager.set_thinking(&sid, thinking).await {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":e,"op":"set_thinking"}).to_string(),
                         ))
                         .await;
                 }
@@ -460,6 +497,63 @@ async fn client_loop(state: AppState, socket: WebSocket) {
                         ))
                         .await;
                 }
+            }
+            "list_importable_sessions" => {
+                let cwd = cmd.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                let sessions = state.manager.list_importable_sessions(cwd).await;
+                let _ = out_tx
+                    .send(Message::Text(
+                        json!({"type":"importable_sessions","cwd":cwd,"sessions":sessions})
+                            .to_string(),
+                    ))
+                    .await;
+            }
+            "import_sessions" => {
+                let cwd = cmd.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                let ids: Vec<String> = cmd
+                    .get("sessionIds")
+                    .and_then(|v| v.as_array())
+                    .map(|xs| {
+                        xs.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match state.manager.import_sessions(cwd, &ids).await {
+                    Ok(sessions) => {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"sessions","sessions":sessions}).to_string(),
+                            ))
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = out_tx
+                            .send(Message::Text(
+                                json!({"type":"error","error":e,"op":"import_sessions"})
+                                    .to_string(),
+                            ))
+                            .await;
+                    }
+                }
+            }
+            "reset_data" => {
+                if cmd.get("confirm").and_then(|v| v.as_str()) != Some("RESET") {
+                    let _ = out_tx
+                        .send(Message::Text(
+                            json!({"type":"error","error":"reset confirmation required","op":"reset_data"})
+                                .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+                let cwds = state.manager.reset_data().await;
+                let _ = out_tx
+                    .send(Message::Text(
+                        json!({"type":"reset","sessions":[],"cwds":cwds,"registeredProjects":[]})
+                            .to_string(),
+                    ))
+                    .await;
             }
             "refresh_cwds" => {
                 let cwds = state.manager.refresh_cwds().await;

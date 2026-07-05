@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#F2F2F2" />
   <title>Synapse</title>
   <link rel="stylesheet" href="vendor/github-dark.min.css" />
-  <link rel="stylesheet" href="app.css?v=7" />
+  <link rel="stylesheet" href="app.css?v=13" />
 </head>
 <body class="screen-workspaces">
   <div id="app">
@@ -17,9 +17,9 @@
       <header class="frosted-nav">
         <div class="nav-safe"></div>
         <div class="nav-row nav-row-actions">
-          <div class="nav-avatar" aria-hidden="true">
+          <button id="settingsBtn" type="button" class="nav-avatar" aria-label="Settings">
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="6.5" r="2.7" stroke="white" stroke-width="1.3"/><path d="M2 17c0-3.866 3.134-7 7-7s7 3.134 7 7" stroke="white" stroke-width="1.3" stroke-linecap="round"/></svg>
-          </div>
+          </button>
           <div class="nav-spacer"></div>
           <button id="searchBtn" class="circle-btn" aria-label="Search"><svg width="15" height="15" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.7"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
           <button id="newBtn" class="circle-btn" aria-label="Add workspace"><svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
@@ -77,8 +77,8 @@
         <button id="newPill">↓ New</button>
         <div id="empty">
           <div class="empty-inner">
-            <div class="brand" aria-hidden="true"><img src="logo.svg" width="56" height="56" alt="" /></div>
-            <h1>Let's build</h1>
+            <div class="brand" aria-hidden="true"><img src="logo.svg" width="48" height="48" alt="" /></div>
+            <h1>How can I help?</h1>
             <p id="emptySub"></p>
             <div class="suggestions">
               <button type="button" data-prompt="Summarize the recent changes in this repo.">Summarize recent changes</button>
@@ -192,6 +192,6 @@
 
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/highlight.min.js"></script>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>

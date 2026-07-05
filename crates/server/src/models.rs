@@ -9,12 +9,32 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingInfo {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub can_disable: bool,
+    #[serde(default)]
+    pub adaptive: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelInfo {
     /// Passed to `claude --model`. Empty = omit the flag (Claude Code default).
     pub id: String,
     /// Human label shown in the picker.
     pub label: String,
+    /// Effort levels supported by this model, as understood by Claude Code.
+    #[serde(default, rename = "effortLevels")]
+    pub effort_levels: Vec<String>,
+    /// Thinking controls supported by this model.
+    #[serde(default)]
+    pub thinking: ThinkingInfo,
+    /// Optional custom capability declarations from ~/.synapse/models.json.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// Build the catalog and the default model id from on-disk config.
@@ -49,27 +69,16 @@ fn build_catalog(
     };
 
     let mut catalog = vec![
-        ModelInfo {
-            id: String::new(),
-            label: "Default".into(),
-        },
-        ModelInfo {
-            id: "opus".into(),
-            label: label_for("opus", "Opus"),
-        },
-        ModelInfo {
-            id: "sonnet".into(),
-            label: label_for("sonnet", "Sonnet"),
-        },
-        ModelInfo {
-            id: "haiku".into(),
-            label: label_for("haiku", "Haiku"),
-        },
+        model_info(String::new(), "Default".into(), Vec::new()),
+        model_info("opus".into(), label_for("opus", "Opus"), Vec::new()),
+        model_info("sonnet".into(), label_for("sonnet", "Sonnet"), Vec::new()),
+        model_info("haiku".into(), label_for("haiku", "Haiku"), Vec::new()),
+        model_info("fable".into(), label_for("fable", "Fable"), Vec::new()),
     ];
     // Custom entries augment the catalog; skip ids already present.
     for m in custom {
         if !m.id.is_empty() && !catalog.iter().any(|c| c.id == m.id) {
-            catalog.push(m);
+            catalog.push(model_info(m.id, m.label, m.capabilities));
         }
     }
 
@@ -87,13 +96,80 @@ fn build_catalog(
     // when it's a full id (e.g. `--default-model claude-sonnet-4-6`) outside the
     // alias set.
     if !default.is_empty() && !catalog.iter().any(|c| c.id == default) {
-        catalog.push(ModelInfo {
-            id: default.clone(),
-            label: default.clone(),
-        });
+        catalog.push(model_info(default.clone(), default.clone(), Vec::new()));
     }
 
     (catalog, default)
+}
+
+fn model_info(id: String, label: String, capabilities: Vec<String>) -> ModelInfo {
+    let (effort_levels, thinking) = if capabilities.is_empty() {
+        inferred_capabilities(&id)
+    } else {
+        declared_capabilities(&id, &capabilities)
+    };
+    ModelInfo {
+        id,
+        label,
+        effort_levels,
+        thinking,
+        capabilities,
+    }
+}
+
+fn inferred_capabilities(id: &str) -> (Vec<String>, ThinkingInfo) {
+    let id = id.to_ascii_lowercase();
+    let levels_x = levels(&["low", "medium", "high", "xhigh", "max"]);
+    let levels_no_x = levels(&["low", "medium", "high", "max"]);
+    if id == "fable" || id.contains("fable-5") {
+        return (levels_x, thinking(true, false, true));
+    }
+    if id == "opus" || id.contains("opus-4-8") || id.contains("opus-4-7") {
+        return (levels_x, thinking(true, true, true));
+    }
+    if id.contains("opus-4-6") {
+        return (levels_no_x, thinking(true, true, true));
+    }
+    if id == "sonnet" || id.contains("sonnet-5") {
+        return (levels_x, thinking(true, true, true));
+    }
+    if id.contains("sonnet-4-6") {
+        return (levels_no_x, thinking(true, true, true));
+    }
+    (Vec::new(), ThinkingInfo::default())
+}
+
+fn declared_capabilities(id: &str, caps: &[String]) -> (Vec<String>, ThinkingInfo) {
+    let has = |needle: &str| caps.iter().any(|c| c == needle);
+    let mut effort = Vec::new();
+    if has("effort") {
+        effort = levels(&["low", "medium", "high"]);
+        if has("xhigh_effort") {
+            effort.push("xhigh".into());
+        }
+        if has("max_effort") {
+            effort.push("max".into());
+        }
+    }
+    let is_fable = id.eq_ignore_ascii_case("fable") || id.to_ascii_lowercase().contains("fable-5");
+    let thinking = ThinkingInfo {
+        supported: has("thinking"),
+        can_disable: has("thinking") && !is_fable,
+        adaptive: has("adaptive_thinking"),
+    };
+    (effort, thinking)
+}
+
+fn levels(xs: &[&str]) -> Vec<String> {
+    xs.iter().map(|x| (*x).to_string()).collect()
+}
+
+fn thinking(supported: bool, can_disable: bool, adaptive: bool) -> ThinkingInfo {
+    ThinkingInfo {
+        supported,
+        can_disable,
+        adaptive,
+    }
 }
 
 fn home() -> Option<std::path::PathBuf> {
@@ -130,10 +206,12 @@ mod tests {
             ModelInfo {
                 id: "gpt-5.5".into(),
                 label: "GPT-5.5".into(),
+                ..Default::default()
             },
             ModelInfo {
                 id: "opus".into(),
                 label: "dup-ignored".into(),
+                ..Default::default()
             },
         ];
 
@@ -147,6 +225,32 @@ mod tests {
             "sonnet label falls back when env absent"
         );
         assert_eq!(cat[3].label, "glm-5.3-external", "haiku label from env");
+        assert!(
+            cat.iter().any(|m| m.id == "fable"),
+            "fable alias is offered"
+        );
+        assert_eq!(
+            cat.iter().find(|m| m.id == "opus").unwrap().effort_levels,
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            cat.iter()
+                .find(|m| m.id == "haiku")
+                .unwrap()
+                .effort_levels
+                .len(),
+            0,
+            "haiku has no documented effort levels"
+        );
+        assert_eq!(
+            cat.iter()
+                .find(|m| m.id == "fable")
+                .unwrap()
+                .thinking
+                .can_disable,
+            false,
+            "fable thinking cannot be disabled"
+        );
         assert!(
             cat.iter().any(|m| m.id == "gpt-5.5"),
             "custom model appended"

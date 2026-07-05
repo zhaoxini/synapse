@@ -212,8 +212,8 @@ impl Db {
     pub fn create_pairing_code(&self, code: &str, device_id: &str, expires_at: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM pairing_codes WHERE device_id = ?1",
-            params![device_id],
+            "DELETE FROM pairing_codes WHERE device_id = ?1 OR code = ?2",
+            params![device_id, code],
         )?;
         conn.execute(
             "INSERT INTO pairing_codes (code, device_id, expires_at) VALUES (?1, ?2, ?3)",
@@ -236,14 +236,6 @@ impl Db {
         }
     }
 
-    pub fn extend_pairing_code(&self, code: &str, device_id: &str, expires_at: i64) -> Result<()> {
-        self.conn.lock().unwrap().execute(
-            "UPDATE pairing_codes SET expires_at = ?3 WHERE code = ?1 AND device_id = ?2",
-            params![code, device_id, expires_at],
-        )?;
-        Ok(())
-    }
-
     pub fn pairing_code_device(&self, code: &str) -> Result<Option<String>> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
@@ -255,14 +247,6 @@ impl Db {
         } else {
             Ok(None)
         }
-    }
-
-    pub fn delete_pairing_code(&self, code: &str) -> Result<()> {
-        self.conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM pairing_codes WHERE code = ?1", params![code])?;
-        Ok(())
     }
 
     pub fn create_connect_token(

@@ -44,6 +44,6 @@ systemctl enable --now synapse-auto-upgrade.timer
 systemctl list-timers synapse-auto-upgrade.timer --no-pager'
 
 info "Seed deployed version and run once..."
-ssh "${RELAY_SSH}" 'echo v0.2.6 > /opt/synapse-relay/.deployed-version; /opt/synapse/scripts/vps-auto-upgrade.sh || true'
+ssh "${RELAY_SSH}" 'echo v0.2.7 > /opt/synapse-relay/.deployed-version; /opt/synapse/scripts/vps-auto-upgrade.sh || true'
 
 info "Done. Timer: systemctl status synapse-auto-upgrade.timer"

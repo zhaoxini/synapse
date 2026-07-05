@@ -13,10 +13,19 @@ const ok = (msg) => console.log(`  ✓ ${msg}`);
 const fail = (msg) => { console.log(`  ✗ ${msg}`); issues.push(msg); };
 
 const suggestedCwds = ["/workspace/synapse", "/workspace/other"];
-const registeredProjects = Array.from({ length: 20 }, (_, i) => `/workspace/manual-${String(i + 1).padStart(2, "0")}`);
+let registeredProjects = Array.from({ length: 20 }, (_, i) => `/workspace/manual-${String(i + 1).padStart(2, "0")}`);
 registeredProjects.unshift("/workspace/manual-added");
+const modelCatalog = [
+  { id: "opus", label: "Opus", effortLevels: ["low", "medium", "high", "xhigh", "max"], thinking: { supported: true, canDisable: true, adaptive: true } },
+  { id: "fable", label: "Fable", effortLevels: ["low", "medium", "high", "xhigh", "max"], thinking: { supported: true, canDisable: false, adaptive: true } },
+  { id: "haiku", label: "Haiku", effortLevels: [], thinking: { supported: false, canDisable: false, adaptive: false } },
+];
+const importableSessions = [
+  { id: "cc-import-1", name: "Imported existing work", cwd: "/workspace/manual-added", started_at: Date.now() - 345600000, model: "opus" },
+];
 
 let sessions = [];
+let lastCreate = null;
 
 function mockSessions() {
   const now = Date.now();
@@ -35,8 +44,8 @@ function startMockWs() {
       ws.send(JSON.stringify({
         type: "hello",
         sessions,
-        models: [{ id: "sonnet", label: "Sonnet" }],
-        defaultModel: "sonnet",
+        models: modelCatalog,
+        defaultModel: "opus",
         cwds: suggestedCwds,
         registeredProjects,
       }));
@@ -44,17 +53,32 @@ function startMockWs() {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
         if (msg.op === "list" || msg.op === "refresh") {
           ws.send(JSON.stringify({ type: "sessions", sessions: mockSessions() }));
-        } else if (msg.op === "refresh_cwds" || msg.op === "register_project") {
+        } else if (msg.op === "refresh_cwds") {
           ws.send(JSON.stringify({ type: "cwds", cwds: suggestedCwds, registeredProjects }));
+        } else if (msg.op === "register_project") {
+          if (msg.path && !registeredProjects.includes(msg.path)) registeredProjects = [msg.path, ...registeredProjects];
+          ws.send(JSON.stringify({ type: "cwds", cwds: suggestedCwds, registeredProjects }));
+        } else if (msg.op === "list_importable_sessions") {
+          ws.send(JSON.stringify({ type: "importable_sessions", cwd: msg.cwd, sessions: importableSessions.filter(s => s.cwd === msg.cwd) }));
+        } else if (msg.op === "import_sessions") {
+          for (const s of importableSessions.filter(s => (msg.sessionIds || []).includes(s.id))) {
+            const imported = { ...s, id: `syn-${s.id}`, state: "idle", pinned: false, archived: false, attached: true };
+            sessions.unshift(imported);
+            ws.send(JSON.stringify({ type: "event", event: { type: "system", subtype: "session_created", sessionId: imported.id, session: imported } }));
+          }
+        } else if (msg.op === "reset_data") {
+          sessions = [];
+          registeredProjects = [];
+          ws.send(JSON.stringify({ type: "reset", sessions, cwds: suggestedCwds, registeredProjects }));
         } else if (msg.op === "history") {
           setTimeout(() => {
             ws.send(JSON.stringify({ type: "history", sessionId: msg.sessionId, events: [], found: true }));
           }, 120);
         } else if (msg.op === "create") {
-          ws.send(JSON.stringify({
-            type: "created",
-            session: { id: "s-new", name: "New session", cwd: "/workspace/synapse", state: "idle", started_at: Date.now() },
-          }));
+          lastCreate = msg.opts || {};
+          const created = { id: "s-new", name: "New session", cwd: lastCreate.cwd || "/workspace/synapse", model: lastCreate.model || "", effort: lastCreate.effort || null, thinking: lastCreate.thinking || null, state: "idle", started_at: Date.now() };
+          sessions.unshift(created);
+          ws.send(JSON.stringify({ type: "created", session: created }));
         } else if (msg.op === "pin") {
           const s = sessions.find(x => x.id === msg.sessionId);
           if (s) {
@@ -104,8 +128,8 @@ async function main() {
     (await page.locator("#pageTitle").textContent()) === "Workspaces"
       ? ok("Workspaces page title") : fail("Workspaces title missing");
 
-    (await page.locator(".ws-row", { hasText: "All Repos" }).count()) >= 1
-      ? ok("All Repos row present") : fail("All Repos row missing");
+    (await page.locator(".ws-row", { hasText: "All Repos" }).count()) === 0
+      ? ok("All Repos row removed") : fail("All Repos should not be shown");
 
     (await page.locator(".ws-row").count()) >= 1
       ? ok("Workspace rows rendered") : fail("Workspace rows missing");
@@ -141,7 +165,7 @@ async function main() {
     !(await page.locator("#workspaceList .sess-row").count())
       ? ok("Sessions not inline on main list") : fail("Sessions should only appear on repo screen");
 
-    await page.locator(".ws-row").nth(1).click();
+    await page.locator(".ws-row").nth(0).click();
     await page.waitForTimeout(200);
     (await page.locator("#screenRepo.active").count()) > 0
       ? ok("Repo screen opens on workspace tap") : fail("Repo screen missing");
@@ -150,6 +174,15 @@ async function main() {
 
     (await page.locator("#repoSessionList .sess-card").count()) > 0
       ? ok("Sessions shown on repo screen") : fail("Repo sessions missing");
+
+    {
+      const repoPad = await page.evaluate(() => {
+        const el = document.querySelector("#screenRepo .screen-scroll");
+        return el ? parseFloat(getComputedStyle(el).paddingBottom) : 0;
+      });
+      repoPad >= 80
+        ? ok("Repo list clears bottom dock") : fail(`Repo scroll padding-bottom too small (${repoPad}px)`);
+    }
 
     !(await page.locator("#repoSessionList .tree-new-row").count())
       ? ok("No new session row on repo screen") : fail("Repo should not show new session row");
@@ -219,8 +252,38 @@ async function main() {
 
     (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
       ? ok("No session added from +") : fail("+ prematurely created a session");
-    await page.locator("#sheetClose").click();
+
+    await page.locator(".add-repo-search input").fill("other");
+    await page.waitForTimeout(100);
+    await page.locator(".add-repo-row", { hasText: "other" }).click();
+    await page.locator(".add-repo-btn").click();
+    await page.waitForTimeout(250);
+    (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
+      ? ok("Workspace import does not import sessions") : fail("Workspace import imported sessions");
+    (await page.locator(".ws-row", { hasText: "other" }).count()) > 0
+      ? ok("Imported workspace appears without session import") : fail("Imported workspace missing");
+
+    await page.locator(".ws-row", { hasText: "manual-added" }).click();
     await page.waitForTimeout(150);
+    (await page.locator("#repoSessionList .sess-card").count()) === 0
+      ? ok("Imported workspace starts with no sessions") : fail("Imported workspace should not auto-import sessions");
+    await page.locator("#repoNewBtn").click();
+    await page.waitForTimeout(150);
+    (await page.locator("#sheetTitle").textContent()) === "Add Session"
+      ? ok("Repo + opens add session sheet") : fail("Repo + should open add session sheet");
+    (await page.locator(".model-row", { hasText: "Import Existing" }).count()) > 0
+      ? ok("Add session sheet offers import") : fail("Session import action missing");
+    await page.locator(".model-row", { hasText: "Import Existing" }).click();
+    await page.waitForTimeout(250);
+    (await page.locator(".model-row", { hasText: "Imported existing work" }).count()) > 0
+      ? ok("Import sheet lists current-workspace sessions") : fail("Importable session missing");
+    await page.locator(".model-row", { hasText: "Imported existing work" }).click();
+    await page.waitForTimeout(250);
+    (await page.locator("#repoSessionList .sess-card", { hasText: "Imported existing work" }).count()) > 0
+      ? ok("Session imports only from repo +") : fail("Imported session missing from repo list");
+    await page.locator("#repoBackBtn").click();
+    await page.waitForTimeout(150);
+    const sessAfterImport = await page.evaluate(() => window.__synapse.state.sessions.length);
 
     await page.evaluate(() => {
       window.__synapse.startNewDraft("/workspace/synapse");
@@ -228,14 +291,14 @@ async function main() {
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("screen-chat")))
       ? ok("New session opens draft chat") : fail("New session should open draft chat");
-    (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessBefore
+    (await page.evaluate(() => window.__synapse.state.sessions.length)) === sessAfterImport
       ? ok("No session added until first message") : fail("New session prematurely created");
     (await page.locator("#empty .brand img[src='logo.svg']").count()) > 0
       ? ok("Synapse logo on empty state") : fail("Logo missing on empty state");
     await page.locator("#backBtn").click();
     await page.waitForTimeout(200);
 
-    await page.locator(".ws-row").nth(1).click();
+    await page.locator(".ws-row").nth(0).click();
     await page.waitForTimeout(150);
 
     (await page.locator(".sess-icon.running").count()) > 0
@@ -300,8 +363,13 @@ async function main() {
       ? ok("Model Active section") : fail("Model Active section missing");
     (await page.locator(".model-search").isVisible())
       ? ok("Model search bar") : fail("Model search missing");
-    (await page.locator(".model-row", { hasText: "Sonnet" }).count()) > 0
+    (await page.locator(".model-row", { hasText: "Opus" }).count()) > 0
       ? ok("Model list from server") : fail("Model rows missing");
+    (await page.locator(".model-section", { hasText: "Reasoning" }).count()) > 0
+      ? ok("Reasoning section from server capabilities") : fail("Reasoning section missing");
+    (await page.locator(".model-row", { hasText: "XHigh" }).count()) > 0
+      ? ok("Effort levels rendered from model capabilities") : fail("Effort levels missing");
+    await page.locator(".model-row", { hasText: "XHigh" }).click();
     await page.locator("#sheetClose").click();
 
     // thinking stream → sheet content
@@ -340,6 +408,19 @@ async function main() {
     await page.waitForTimeout(200);
     (await page.evaluate(() => document.body.classList.contains("screen-workspaces")))
       ? ok("Back returns to workspaces list") : fail("Back did not return to workspaces list");
+
+    await page.locator("#settingsBtn").click();
+    await page.waitForTimeout(150);
+    (await page.locator("#sheetTitle").textContent()) === "Settings"
+      ? ok("Settings sheet opens") : fail("Settings sheet missing");
+    await page.locator(".mode-row", { hasText: "Reset Synapse Data" }).click();
+    await page.waitForTimeout(250);
+    (await page.locator("#connectOverlay").isVisible())
+      ? ok("Reset clears local credentials") : fail("Reset should show pairing overlay");
+    (await page.evaluate(() => window.__synapse.state.sessions.length)) === 0
+      ? ok("Reset clears session index") : fail("Reset did not clear sessions");
+    (await page.evaluate(() => window.__synapse.state.registeredProjects.length)) === 0
+      ? ok("Reset clears registered workspaces") : fail("Reset did not clear workspaces");
 
     const light = await page.evaluate(() => document.documentElement.classList.contains("theme-light"));
     light ? ok("Light theme applied") : fail("Light theme not applied");

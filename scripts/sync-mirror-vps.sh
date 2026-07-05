@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="${SYNAPSE_ROOT:-/opt/synapse}"
 MIRROR="${SYNAPSE_MIRROR_ROOT:-/opt/synapse/mirror}"
-VERSION="${SYNAPSE_VERSION:-v0.2.6}"
+VERSION="${SYNAPSE_VERSION:-v0.2.7}"
 
 mkdir -p "${MIRROR}/install" "${MIRROR}/releases" "${MIRROR}/scripts"
 

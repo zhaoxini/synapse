@@ -59,6 +59,10 @@ pub struct ClaudeSession {
     /// `base_args` reads the latest value. ponytail: std Mutex, only ever
     /// lock+clone (never held across `.await`).
     pub model: std::sync::Mutex<Option<String>>,
+    /// Reasoning effort passed to `--effort` (None → Claude Code default).
+    pub effort: std::sync::Mutex<Option<String>>,
+    /// Thinking mode: "off" maps to MAX_THINKING_TOKENS=0; None/auto uses Claude Code default.
+    pub thinking: std::sync::Mutex<Option<String>>,
     /// Permission mode passed to `--permission-mode` (None → Claude Code default).
     /// Mutable mid-session like `model`. ponytail: std Mutex, lock+clone only.
     pub permission_mode: std::sync::Mutex<Option<String>>,
@@ -95,12 +99,16 @@ impl ClaudeSession {
         model: Option<String>,
         permission_mode: Option<String>,
         agent: Option<String>,
+        effort: Option<String>,
+        thinking: Option<String>,
     ) -> Self {
         Self {
             id,
             cwd,
             name,
             model: std::sync::Mutex::new(model),
+            effort: std::sync::Mutex::new(effort),
+            thinking: std::sync::Mutex::new(thinking),
             permission_mode: std::sync::Mutex::new(permission_mode),
             agent,
             bin,
@@ -121,6 +129,29 @@ impl ClaudeSession {
     /// `claude -p --model … --resume`), so a running turn is unaffected.
     pub fn set_model(&self, model: Option<String>) {
         *self.model.lock().unwrap() = model.filter(|s| !s.is_empty());
+    }
+
+    pub fn effort(&self) -> Option<String> {
+        self.effort.lock().unwrap().clone()
+    }
+
+    pub fn set_effort(&self, effort: Option<String>) {
+        *self.effort.lock().unwrap() = effort.filter(|s| !s.is_empty() && s != "auto");
+    }
+
+    pub fn thinking(&self) -> Option<String> {
+        self.thinking.lock().unwrap().clone()
+    }
+
+    pub fn set_thinking(&self, thinking: Option<String>) {
+        *self.thinking.lock().unwrap() = thinking.filter(|s| !s.is_empty() && s != "auto");
+    }
+
+    fn env_overrides(&self) -> Vec<(&'static str, String)> {
+        match self.thinking.lock().unwrap().as_deref() {
+            Some("off") => vec![("MAX_THINKING_TOKENS", "0".to_string())],
+            _ => Vec::new(),
+        }
     }
 
     /// Current permission mode, if any (None → Claude Code default).
@@ -160,6 +191,10 @@ impl ClaudeSession {
         if let Some(m) = self.model.lock().unwrap().clone() {
             args.push("--model".into());
             args.push(m);
+        }
+        if let Some(effort) = self.effort.lock().unwrap().clone() {
+            args.push("--effort".into());
+            args.push(effort);
         }
         if let Some(a) = &self.agent {
             args.push("--agent".into());
@@ -255,6 +290,9 @@ impl ClaudeSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        for (k, v) in self.env_overrides() {
+            cmd.env(k, v);
+        }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -632,6 +670,8 @@ mod tests {
             None,
             mode.map(|m| m.into()),
             None,
+            None,
+            None,
         )
     }
 
@@ -658,6 +698,32 @@ mod tests {
         assert!(!buffered.iter().any(|a| a == "--permission-prompt-tool"));
     }
 
+    #[test]
+    fn effort_and_thinking_settings_reach_claude_cli() {
+        let s = ClaudeSession::new(
+            ClaudeBin(PathBuf::from("claude")),
+            "id".into(),
+            PathBuf::from("/tmp"),
+            None,
+            Some("opus".into()),
+            None,
+            None,
+            Some("xhigh".into()),
+            Some("off".into()),
+        );
+        let args = s.base_args(true, &None);
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--model".to_string(), "opus".to_string()]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--effort".to_string(), "xhigh".to_string()]));
+        assert_eq!(
+            s.env_overrides(),
+            vec![("MAX_THINKING_TOKENS", "0".to_string())]
+        );
+    }
+
     #[tokio::test]
     async fn respond_permission_without_active_turn_is_false() {
         // No streaming turn running → no stdin channel → the decision is a no-op.
@@ -678,7 +744,7 @@ pub struct ManagedEntry {
     pub session_id: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "title", alias = "displayName")]
     pub name: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,

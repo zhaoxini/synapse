@@ -12,6 +12,10 @@ const STATIC = "http://127.0.0.1:8765";
 const WS_PORT = 14173;
 const OUT = process.env.SYNAPSE_SCREENSHOT_DIR || path.join("/tmp", "synapse-screenshots");
 
+function mockRegisteredProjects() {
+  return ["/workspace/synapse", "/workspace/other"];
+}
+
 function mockSessions() {
   const now = Date.now();
   return [
@@ -29,7 +33,8 @@ function startMockWs() {
         sessions: mockSessions(),
         models: [{ id: "sonnet", label: "Sonnet" }],
         defaultModel: "sonnet",
-        cwds: ["/workspace/synapse"],
+        cwds: mockRegisteredProjects(),
+        registeredProjects: mockRegisteredProjects(),
       }));
       ws.on("message", (raw) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
@@ -67,7 +72,7 @@ async function main() {
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT, "01-repos.png"), fullPage: false });
 
-    await page.locator(".ws-row").nth(1).click();
+    await page.locator(".ws-row", { hasText: "synapse" }).first().click();
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(OUT, "02-repo-sessions.png"), fullPage: false });
 

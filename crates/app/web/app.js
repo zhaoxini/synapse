@@ -45,6 +45,8 @@ const state = {
   models: [],          // model catalog from hello: [{id,label}]
   defaultModel: "",    // pre-selected model id for new sessions
   pendingModel: null,  // model chosen before a session exists; used on create
+  pendingEffort: null,
+  pendingThinking: null,
   cwds: [],            // suggested git repos from Claude Code config
   registeredProjects: [], // repos explicitly added in Synapse
   pendingCwd: null,    // workspace chosen for the next create
@@ -384,6 +386,11 @@ function doConnect(first) {
   };
   state.ws.onclose = () => {
     state.connected = false;
+    if (!creds() && !window.__SYNAPSE__) {
+      $("reconnect").classList.remove("show");
+      showConnectOverlay();
+      return;
+    }
     if (first) {
       failConnect();
       showPairError("Could not connect — check that synapse-server is running");
@@ -428,7 +435,7 @@ function handle(v) {
       select(v.session.id);
       // The pick has been consumed by create; clear it so currentCwd()/
       // currentModelId() never report a stale choice before the next session.
-      state.pendingCwd = null; state.pendingModel = null;
+      state.pendingCwd = null; state.pendingModel = null; state.pendingEffort = null; state.pendingThinking = null;
       if (state.pendingSend) {
         const t = state.pendingSend; state.pendingSend = null;
         send({ op: "send", sessionId: v.session.id, content: t });
@@ -439,6 +446,12 @@ function handle(v) {
       state.cwds = v.cwds || [];
       state.registeredProjects = v.registeredProjects || state.registeredProjects;
       if (state.screen === "workspaces" || state.screen === "repo") refreshLists();
+      break;
+    case "importable_sessions":
+      renderImportableSessions(v.cwd || "", v.sessions || []);
+      break;
+    case "reset":
+      applyReset(v);
       break;
     case "history":
       if (v.sessionId && v.sessionId !== state.activeId) break;
@@ -1150,6 +1163,7 @@ function openModelSheet() {
       empty.textContent = "No models match your search";
       list.appendChild(empty);
     }
+    if (!query) renderReasoningRows(list);
   };
 
   search.addEventListener("input", () => renderList(search.value));
@@ -1181,6 +1195,77 @@ function openModeSheet() {
   wrap.appendChild(card);
   $("bottomSheet").classList.add("sheet-picker");
   openSheet("Mode", wrap);
+}
+
+function openSettingsSheet() {
+  closeMenus();
+  const wrap = document.createElement("div");
+  const card = document.createElement("div");
+  card.className = "mode-card";
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "mode-row";
+  row.innerHTML = `<span class="mode-row-body"><p class="mode-row-label">Reset Synapse Data</p><p class="mode-row-desc">Clear workspaces, Synapse session index, pairing, and local UI credentials.</p></span>`;
+  row.addEventListener("click", () => resetData());
+  card.appendChild(row);
+  wrap.appendChild(card);
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Settings", wrap);
+}
+
+function openAddSessionSheet() {
+  closeMenus();
+  collapseDock();
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+  const addRow = (label, desc, onClick) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-row";
+    row.innerHTML = `<span class="model-row-label">${escapeHtml(label)}${desc ? `<span class="model-row-sub">${escapeHtml(desc)}</span>` : ""}</span>`;
+    row.addEventListener("click", onClick);
+    list.appendChild(row);
+  };
+  addRow("New Session", "Start empty chat in this workspace", () => { closeSheet(); startNewDraft(state.activeRepo || undefined); });
+  addRow("Import Existing", "Attach Claude Code sessions from this workspace", () => {
+    send({ op: "list_importable_sessions", cwd: state.activeRepo });
+    list.innerHTML = `<div class="model-empty">Loading…</div>`;
+  });
+  wrap.appendChild(list);
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Add Session", wrap);
+}
+
+function renderImportableSessions(cwd, sessions) {
+  if (normalizePath(cwd) !== normalizePath(state.activeRepo)) return;
+  const wrap = document.createElement("div");
+  wrap.className = "model-sheet";
+  const list = document.createElement("div");
+  list.className = "model-sheet-list";
+  if (!sessions.length) {
+    const empty = document.createElement("div");
+    empty.className = "model-empty";
+    empty.textContent = "No importable sessions";
+    list.appendChild(empty);
+  }
+  for (const s of sessions) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-row";
+    const name = escapeHtml(s.name || s.short_id);
+    const sub = s.short_id ? `<span class="model-row-sub">${escapeHtml(s.short_id)}</span>` : "";
+    row.innerHTML = `<span class="model-row-label">${name}${sub}</span>`;
+    row.addEventListener("click", () => {
+      send({ op: "import_sessions", cwd, sessionIds: [s.id] });
+      closeSheet();
+    });
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  $("bottomSheet").classList.add("sheet-picker");
+  openSheet("Import Session", wrap);
 }
 
 // =================== tool views (per-tool rich rendering) ===================
@@ -1886,6 +1971,33 @@ function updatePulse() {
 }
 
 // =================== sessions ===================
+function applyReset(v) {
+  state.sessions = v.sessions || [];
+  state.registeredProjects = v.registeredProjects || [];
+  state.cwds = v.cwds || [];
+  state.activeId = "";
+  state.activeRepo = null;
+  state.pendingCwd = null;
+  state.pendingModel = null;
+  state.pendingEffort = null;
+  state.pendingThinking = null;
+  state.pendingMode = null;
+  state.searchQuery = "";
+  state.showArchived = false;
+  clearMessages();
+  closeSheet();
+  clearCreds();
+  window.__SYNAPSE__ = null;
+  if (state.ws) { state.ws.close(); state.ws = null; }
+  state.connected = false;
+  showWorkspaces();
+  showConnectOverlay();
+}
+
+function resetData() {
+  send({ op: "reset_data", confirm: "RESET" });
+}
+
 function refreshLists() {
   if (state.screen === "repo") renderRepoSessionList();
   else if (state.screen === "workspaces") renderWorkspaceList();
@@ -2365,22 +2477,6 @@ function renderWorkspaceList() {
 
   let any = false;
 
-  const allSessions = filteredSessions(null);
-  if (!q || allSessions.length) {
-    const allBtn = document.createElement("button");
-    allBtn.type = "button";
-    allBtn.className = "ws-row list-row";
-    const allCount = allSessions.length;
-    allBtn.innerHTML =
-      FOLDER_STACK_SVG +
-      `<span class="ws-name">All Repos</span>` +
-      (allCount ? `<span class="ws-count">${allCount}</span>` : "") +
-      CHEV_SVG;
-    allBtn.addEventListener("click", () => openRepoScreen("all"));
-    list.appendChild(allBtn);
-    any = true;
-  }
-
   for (const path of paths) {
     const label = basename(path);
     const sessions = filteredSessions(path);
@@ -2509,11 +2605,14 @@ function openAddWorkspace() {
   list.className = "add-repo-list";
   wrap.appendChild(list);
 
+  const footer = document.createElement("div");
+  footer.className = "add-repo-footer";
   const addBtn = document.createElement("button");
   addBtn.type = "button";
   addBtn.className = "add-repo-btn";
   addBtn.textContent = "Add Repo";
-  wrap.appendChild(addBtn);
+  footer.appendChild(addBtn);
+  wrap.appendChild(footer);
 
   const syncBtn = () => {
     const ok = !!(selected || inp.value.trim());
@@ -2716,7 +2815,8 @@ $("backBtn").addEventListener("click", () => {
   }
 });
 $("repoBackBtn")?.addEventListener("click", () => { haptic("light"); showWorkspaces(); });
-$("repoNewBtn")?.addEventListener("click", () => { haptic("light"); expandDock(); });
+$("repoNewBtn")?.addEventListener("click", () => { haptic("light"); openAddSessionSheet(); });
+$("settingsBtn")?.addEventListener("click", () => { haptic("light"); openSettingsSheet(); });
 $("dockCollapsedTap")?.addEventListener("click", () => expandDock());
 $("dockDim")?.addEventListener("click", () => collapseDock());
 $("dockInput")?.addEventListener("keydown", (e) => {
@@ -2798,6 +2898,8 @@ function newSession() {
   if (state.creating) return;
   const opts = {};
   if (state.pendingModel) opts.model = state.pendingModel;
+  if (state.pendingEffort) opts.effort = state.pendingEffort;
+  if (state.pendingThinking) opts.thinking = state.pendingThinking;
   const cwd = state.pendingCwd || workspacePaths()[0];
   if (cwd) opts.cwd = cwd;
   if (state.pendingMode) opts.permission_mode = state.pendingMode;
@@ -2827,9 +2929,25 @@ function labelForModel(id) {
   const m = state.models.find(x => x.id === id);
   return m ? m.label : id;
 }
+function modelCaps(id) {
+  return state.models.find(x => x.id === id)
+    || state.models.find(x => x.id === state.defaultModel)
+    || null;
+}
+function effortLabel(id) {
+  return id === "xhigh" ? "XHigh" : id ? id[0].toUpperCase() + id.slice(1) : "Auto";
+}
 function currentModelId() {
   const s = state.sessions.find(x => x.id === state.activeId);
   return (s ? s.model : (state.pendingModel || state.defaultModel)) || "";
+}
+function currentEffort() {
+  const s = state.sessions.find(x => x.id === state.activeId);
+  return (s ? s.effort : state.pendingEffort) || "";
+}
+function currentThinking() {
+  const s = state.sessions.find(x => x.id === state.activeId);
+  return (s ? s.thinking : state.pendingThinking) || "";
 }
 function currentCwd() {
   const s = state.sessions.find(x => x.id === state.activeId);
@@ -2837,7 +2955,8 @@ function currentCwd() {
 }
 function syncModelLabel() {
   const id = currentModelId();
-  const text = id ? labelForModel(id) : "Auto";
+  const effort = currentEffort();
+  const text = (id ? labelForModel(id) : "Auto") + (effort ? ` · ${effortLabel(effort)}` : "");
   for (const elId of ["modelLabel", "dockModelLabel"]) {
     const ml = $(elId);
     if (ml) ml.textContent = text;
@@ -2888,6 +3007,57 @@ function chooseModel(id) {
   }
   syncModelLabel();
   haptic("light");
+}
+function chooseEffort(effort) {
+  if (state.activeId) {
+    send({ op: "set_effort", sessionId: state.activeId, effort });
+    const s = state.sessions.find(x => x.id === state.activeId);
+    if (s) s.effort = effort;
+  } else {
+    state.pendingEffort = effort;
+  }
+  syncModelLabel();
+  haptic("light");
+}
+function chooseThinking(thinking) {
+  if (state.activeId) {
+    send({ op: "set_thinking", sessionId: state.activeId, thinking });
+    const s = state.sessions.find(x => x.id === state.activeId);
+    if (s) s.thinking = thinking;
+  } else {
+    state.pendingThinking = thinking;
+  }
+  haptic("light");
+}
+function renderReasoningRows(list) {
+  const caps = modelCaps(currentModelId());
+  const levels = caps?.effortLevels || [];
+  if (!levels.length && !caps?.thinking?.supported) return;
+  const h = document.createElement("div");
+  h.className = "model-section";
+  h.textContent = "Reasoning";
+  list.appendChild(h);
+  const cur = currentEffort();
+  for (const lvl of levels) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-row" + (lvl === cur ? " sel" : "");
+    row.innerHTML = `<span class="model-row-label">${effortLabel(lvl)}</span>` + (lvl === cur ? `<span class="model-row-check">✓</span>` : "");
+    row.addEventListener("click", () => chooseEffort(lvl));
+    list.appendChild(row);
+  }
+  if (caps?.thinking?.supported) {
+    const thinking = currentThinking();
+    for (const opt of ["auto", "off"]) {
+      if (opt === "off" && !caps.thinking.canDisable) continue;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "model-row" + ((thinking || "auto") === opt ? " sel" : "");
+      row.innerHTML = `<span class="model-row-label">Thinking ${opt === "off" ? "Off" : "Auto"}</span>`;
+      row.addEventListener("click", () => chooseThinking(opt));
+      list.appendChild(row);
+    }
+  }
 }
 function chooseCwd(path) {
   closeMenus();
@@ -2979,7 +3149,7 @@ $("sheetMask").addEventListener("click", closeSheet);
 $("pairCodeConnect")?.addEventListener("click", () => connectWithCode());
 $("pairCode")?.addEventListener("keydown", (e) => { if (e.key === "Enter") connectWithCode(); });
 $("pairManualConnect")?.addEventListener("click", pairFromForm);
-window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession };
+window.__synapse = { handle, handleEvent, state, parsePairLink, applyCreds, startNewDraft, openSession, resetData };
 (async () => {
   const urlCode = pairingCodeFromUrl();
   // ?code= in the URL always wins over saved creds — that's the share link contract.

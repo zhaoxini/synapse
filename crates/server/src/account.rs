@@ -48,7 +48,8 @@ impl Config {
 }
 
 fn homedir() -> PathBuf {
-    std::env::var_os("HOME")
+    std::env::var_os("SYNAPSE_HOME")
+        .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -121,9 +122,15 @@ struct DeviceResp {
     device_token: String,
 }
 
+#[derive(Serialize)]
+struct PairingCodeBody<'a> {
+    code: &'a str,
+}
+
 #[derive(Deserialize)]
 pub struct PairingCodeResp {
     pub code: String,
+    #[allow(dead_code)]
     pub expires_in: i64,
 }
 
@@ -202,6 +209,27 @@ pub async fn login_account(
     .await
 }
 
+pub async fn sign_in_or_register(
+    relay: &str,
+    email: &str,
+    password: &str,
+    device_name: &str,
+) -> Result<Config> {
+    match login_account(relay, email, password, device_name).await {
+        Ok(cfg) => Ok(cfg),
+        Err(login_err) => {
+            tracing::debug!("login failed: {login_err}; trying register");
+            register_account(relay, email, password, "", device_name)
+                .await
+                .map_err(|reg_err| {
+                    anyhow::anyhow!(
+                        "sign-in failed ({login_err}). Could not create account either ({reg_err})."
+                    )
+                })
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn register_device(
     client: &reqwest::Client,
@@ -259,7 +287,23 @@ pub fn load_pairing_code() -> Option<String> {
         .filter(|s| s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()))
 }
 
-pub async fn create_pairing_code(cfg: &Config) -> Result<PairingCodeResp> {
+fn gen_pairing_code() -> String {
+    use rand::Rng;
+    format!("{:06}", rand::thread_rng().gen_range(0..1_000_000))
+}
+
+pub fn load_or_create_pairing_code(reset: bool) -> Result<String> {
+    if !reset {
+        if let Some(code) = load_pairing_code() {
+            return Ok(code);
+        }
+    }
+    let code = gen_pairing_code();
+    save_pairing_code(&code)?;
+    Ok(code)
+}
+
+pub async fn register_pairing_code(cfg: &Config, code: &str) -> Result<PairingCodeResp> {
     let client = reqwest::Client::new();
     let resp: PairingCodeResp = client
         .post(format!("{}/api/v1/pairing-codes", cfg.relay_api))
@@ -267,29 +311,31 @@ pub async fn create_pairing_code(cfg: &Config) -> Result<PairingCodeResp> {
             "Authorization",
             format!("Device {}:{}", cfg.device_id, cfg.device_token),
         )
+        .json(&PairingCodeBody { code })
         .send()
         .await
-        .context("pairing code request")?
+        .context("pairing code registration request")?
         .error_for_status()
-        .context("pairing code failed")?
+        .context("pairing code registration failed")?
         .json()
         .await
-        .context("pairing code response")?;
+        .context("pairing code registration response")?;
+    if resp.code != code {
+        bail!("relay returned a different pairing code");
+    }
     save_pairing_code(&resp.code)?;
     Ok(resp)
 }
 
-/// Keep relay pairing code alive for as long as the server runs.
-pub fn spawn_pairing_refresh(cfg: Config) {
+/// Keep relay mapping for the stable local pairing code alive while the server runs.
+pub fn spawn_pairing_registration(cfg: Config, code: String) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(240));
-        interval.tick().await;
         loop {
-            interval.tick().await;
-            match create_pairing_code(&cfg).await {
-                Ok(resp) => tracing::debug!(code = %resp.code, "pairing code refreshed"),
-                Err(e) => tracing::warn!("pairing code refresh failed: {e}"),
+            match register_pairing_code(&cfg, &code).await {
+                Ok(resp) => tracing::debug!(code = %resp.code, "pairing code registered"),
+                Err(e) => tracing::warn!("pairing code registration failed: {e}"),
             }
+            tokio::time::sleep(std::time::Duration::from_secs(240)).await;
         }
     });
 }
@@ -335,6 +381,31 @@ pub fn print_status(cfg: &Config) {
     println!();
 }
 
+pub fn resolve_relay_arg(relay: Option<String>) -> Result<String> {
+    relay
+        .filter(|s| !s.trim().is_empty())
+        .or_else(default_relay_url)
+        .context("relay URL required")
+}
+
+pub fn resolve_email_arg(email: Option<String>) -> Result<String> {
+    let email = match email {
+        Some(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => read_line("Email: ")?,
+    };
+    if email.is_empty() || !email.contains('@') {
+        bail!("valid email required");
+    }
+    Ok(email)
+}
+
+pub fn resolve_password_arg(password: Option<String>) -> Result<String> {
+    match password {
+        Some(v) if !v.is_empty() => Ok(v),
+        _ => read_password("Password: "),
+    }
+}
+
 /// First-run interactive setup: email + password only. Relay comes from
 /// `SYNAPSE_RELAY` or a one-time prompt. Tries login first, then register.
 pub async fn interactive_setup() -> Result<Config> {
@@ -359,24 +430,10 @@ pub async fn interactive_setup() -> Result<Config> {
     let password = read_password("Password: ")?;
     let device_name = default_device_name();
     println!("\n  Signing in…\n");
-    match login_account(&relay, &email, &password, &device_name).await {
-        Ok(cfg) => {
-            cfg.save()?;
-            Ok(cfg)
-        }
-        Err(login_err) => {
-            tracing::debug!("login failed: {login_err}; trying register");
-            match register_account(&relay, &email, &password, "", &device_name).await {
-                Ok(cfg) => {
-                    cfg.save()?;
-                    Ok(cfg)
-                }
-                Err(reg_err) => {
-                    bail!("sign-in failed ({login_err}). Could not create account either ({reg_err}).");
-                }
-            }
-        }
-    }
+    let cfg = sign_in_or_register(&relay, &email, &password, &device_name).await?;
+    cfg.save()?;
+    let _ = load_or_create_pairing_code(true)?;
+    Ok(cfg)
 }
 
 pub fn read_line(prompt: &str) -> Result<String> {
@@ -389,9 +446,118 @@ pub fn read_line(prompt: &str) -> Result<String> {
 }
 
 pub fn read_password(prompt: &str) -> Result<String> {
-    let s = read_line(prompt)?;
+    use std::io::{self, Write};
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let echo_disabled = std::process::Command::new("stty")
+        .arg("-echo")
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let mut s = String::new();
+    let read = io::stdin().read_line(&mut s);
+    if echo_disabled {
+        let _ = std::process::Command::new("stty")
+            .arg("echo")
+            .stderr(std::process::Stdio::null())
+            .status();
+        println!();
+    }
+    read?;
+    let s = s.trim().to_string();
     if s.is_empty() {
         bail!("password required");
     }
     Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn home_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn tempfile_home() -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("synapse-account-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    struct HomeGuard {
+        old: Option<std::ffi::OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl HomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let lock = home_lock();
+            let old = std::env::var_os("SYNAPSE_HOME");
+            std::env::set_var("SYNAPSE_HOME", path);
+            Self { old, _lock: lock }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            if let Some(old) = self.old.take() {
+                std::env::set_var("SYNAPSE_HOME", old);
+            } else {
+                std::env::remove_var("SYNAPSE_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn pairing_code_request_serializes_code() {
+        let body = PairingCodeBody { code: "123456" };
+        let json = serde_json::to_value(body).unwrap();
+        assert_eq!(json["code"], "123456");
+    }
+
+    #[test]
+    fn fixed_pairing_code_reuses_saved_value() {
+        let dir = tempfile_home();
+        let _guard = HomeGuard::set(&dir);
+
+        save_pairing_code("123456").unwrap();
+        let code = load_or_create_pairing_code(false).unwrap();
+
+        assert_eq!(code, "123456");
+    }
+
+    #[test]
+    fn fixed_pairing_code_reset_replaces_saved_value() {
+        let dir = tempfile_home();
+        let _guard = HomeGuard::set(&dir);
+
+        save_pairing_code("123456").unwrap();
+        let code = load_or_create_pairing_code(true).unwrap();
+
+        assert_ne!(code, "123456");
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(load_pairing_code().unwrap(), code);
+    }
+
+    #[test]
+    fn fixed_pairing_code_repairs_invalid_saved_value() {
+        let dir = tempfile_home();
+        let _guard = HomeGuard::set(&dir);
+
+        let path = pairing_code_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "bad\n").unwrap();
+
+        let code = load_or_create_pairing_code(false).unwrap();
+
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(load_pairing_code().unwrap(), code);
+    }
 }

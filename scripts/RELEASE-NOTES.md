@@ -1,3 +1,14 @@
+## Synapse v0.2.7 — Fixed local pairing code
+
+- `synapse-server login` is now interactive by default; relay/email/password flags are optional.
+- Relay URL comes from the bundled default unless overridden.
+- Server stores a stable 6-digit pairing code locally and reuses it across restarts.
+- Server registers the same `code -> device_id` mapping with the relay instead of rotating codes.
+- Pairing code stays valid until the user logs in again; offline devices return `device offline`.
+- Web UI, workspace/session import, reset data, model/thinking controls, and composer polish included.
+
+---
+
 ## Synapse v0.2.4 — Background server start
 
 - `synapse-server` now starts in the **background** by default (wrapper)

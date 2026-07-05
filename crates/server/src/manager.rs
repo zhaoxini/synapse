@@ -20,6 +20,8 @@ pub struct SessionSummary {
     pub name: Option<String>,
     pub cwd: String,
     pub model: Option<String>,
+    pub effort: Option<String>,
+    pub thinking: Option<String>,
     pub permission_mode: Option<String>,
     pub agent: Option<String>,
     pub state: SessionState,
@@ -44,9 +46,23 @@ pub struct CreateOpts {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
     pub permission_mode: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ImportableSession {
+    pub id: String,
+    pub short_id: String,
+    pub name: Option<String>,
+    pub cwd: String,
+    pub started_at: Option<u64>,
+    pub model: Option<String>,
 }
 
 struct Entry {
@@ -323,6 +339,8 @@ impl SessionManager {
             name,
             cwd,
             model: session.model(),
+            effort: session.effort(),
+            thinking: session.thinking(),
             permission_mode: session.permission_mode(),
             agent: session.agent.clone(),
             state,
@@ -438,6 +456,8 @@ impl SessionManager {
                 .or_else(|| self.default_model.clone()),
             opts.permission_mode,
             opts.agent,
+            opts.effort,
+            opts.thinking,
         ));
         let (tx, rx) = mpsc::channel(16);
         let started_at = now_ms();
@@ -470,6 +490,40 @@ impl SessionManager {
             (e.session.clone(), e.started_at, e.attached)
         };
         session.set_model(model);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
+    }
+
+    pub async fn set_effort(&self, id: &str, effort: Option<String>) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        session.set_effort(effort);
+        let summary = self.summary(id, &session, started_at, attached).await;
+        self.broadcast(serde_json::json!({
+            "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
+        }))
+        .await;
+        Ok(())
+    }
+
+    pub async fn set_thinking(&self, id: &str, thinking: Option<String>) -> Result<(), String> {
+        let (session, started_at, attached) = {
+            let sessions = self.sessions.lock().await;
+            let e = sessions
+                .get(id)
+                .ok_or_else(|| "unknown session".to_string())?;
+            (e.session.clone(), e.started_at, e.attached)
+        };
+        session.set_thinking(thinking);
         let summary = self.summary(id, &session, started_at, attached).await;
         self.broadcast(serde_json::json!({
             "type": "system", "subtype": "session_updated", "sessionId": id, "session": summary
@@ -692,19 +746,74 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Attach to sessions already running on this machine (`claude agents`).
-    pub async fn sync_managed(self: &Arc<Self>) -> usize {
+    pub async fn list_importable_sessions(&self, cwd: &str) -> Vec<ImportableSession> {
         let entries = match list_managed(&self.bin).await {
             Ok(e) => e,
-            Err(_) => return 0,
+            Err(_) => return Vec::new(),
         };
-        let mut count = 0;
+        let attached = self.attached_cc_ids().await;
+        importable_entries(entries, cwd, &attached)
+    }
+
+    pub async fn import_sessions(
+        self: &Arc<Self>,
+        cwd: &str,
+        ids: &[String],
+    ) -> Result<Vec<SessionSummary>, String> {
+        let entries = list_managed(&self.bin).await.map_err(|e| e.to_string())?;
+        let want: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let cwd = normalize_path_string(cwd);
         for e in entries {
-            if self.attach_managed(e).await.is_some() {
-                count += 1;
+            let sid = e.session_id.clone().or(e.id.clone()).unwrap_or_default();
+            if !want.contains(sid.as_str()) || !is_attachable(&e) {
+                continue;
+            }
+            if normalize_path_string(e.cwd.as_deref().unwrap_or("")) != cwd {
+                continue;
+            }
+            let _ = self.attach_managed(e).await;
+        }
+        Ok(self.list().await)
+    }
+
+    pub async fn reset_data(&self) -> Vec<String> {
+        let entries: Vec<mpsc::Sender<TurnMsg>> = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.drain().map(|(_, e)| e.tx).collect()
+        };
+        for tx in entries {
+            let _ = tx.send(TurnMsg::Stop).await;
+        }
+        self.renames.lock().await.clear();
+        self.pinned.lock().await.clear();
+        self.archived.lock().await.clear();
+        self.hidden.lock().await.clear();
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            for p in synapse_data_paths(home) {
+                let _ = tokio::fs::remove_file(p).await;
             }
         }
-        count
+        let cwds = merge_projects(discover_projects(), Vec::new());
+        *self.cwds.lock().await = cwds.clone();
+        cwds
+    }
+
+    async fn attached_cc_ids(&self) -> HashSet<String> {
+        let sessions: Vec<(String, Arc<ClaudeSession>)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, e)| (id.clone(), e.session.clone()))
+                .collect()
+        };
+        let mut out = HashSet::new();
+        for (id, session) in sessions {
+            out.insert(id);
+            if let Some(cc) = session.cc_session_id.lock().await.clone() {
+                out.insert(cc);
+            }
+        }
+        out
     }
 
     async fn attach_managed(self: &Arc<Self>, e: ManagedEntry) -> Option<()> {
@@ -748,6 +857,8 @@ impl SessionManager {
             cwd,
             name,
             self.default_model.clone(),
+            None,
+            None,
             None,
             None,
         ));
@@ -826,9 +937,54 @@ fn now_ms() -> u64 {
 }
 
 /// A `claude agents` entry is attachable only if it can be resumed by
-/// `claude -p --resume <id>`. Background agents cannot, so they're excluded.
+/// `claude -p --resume <id>`. Stopped or completed sessions cannot, so they're excluded.
 fn is_attachable(e: &ManagedEntry) -> bool {
-    e.kind.as_deref() != Some("background")
+    !matches!(e.state.as_deref(), Some("stopped") | Some("completed"))
+}
+
+fn importable_entries(
+    entries: Vec<ManagedEntry>,
+    cwd: &str,
+    already_attached: &HashSet<String>,
+) -> Vec<ImportableSession> {
+    let cwd = normalize_path_string(cwd);
+    let mut out = Vec::new();
+    for e in entries {
+        if !is_attachable(&e) {
+            continue;
+        }
+        let Some(id) = e.session_id.clone().or(e.id.clone()) else {
+            continue;
+        };
+        if already_attached.contains(&id) {
+            continue;
+        }
+        let ecwd = normalize_path_string(e.cwd.as_deref().unwrap_or(""));
+        if ecwd != cwd {
+            continue;
+        }
+        out.push(ImportableSession {
+            id,
+            short_id: e.id.clone().unwrap_or_default(),
+            name: e.name,
+            cwd: ecwd,
+            started_at: e.started_at,
+            model: None,
+        });
+    }
+    out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    out
+}
+
+fn synapse_data_paths(home: PathBuf) -> Vec<PathBuf> {
+    let root = home.join(".synapse");
+    vec![
+        root.join("projects.json"),
+        root.join("session_meta.json"),
+        root.join("models.json"),
+        root.join("config.json"),
+        root.join("pairing-code"),
+    ]
 }
 
 #[cfg(test)]
@@ -848,14 +1004,84 @@ mod tests {
     }
 
     #[test]
-    fn background_agents_are_not_attachable() {
-        assert!(!is_attachable(&entry(Some("background"))));
+    fn background_agents_are_attachable() {
+        assert!(is_attachable(&entry(Some("background"))));
+    }
+
+    #[test]
+    fn stopped_and_completed_sessions_are_not_attachable() {
+        let mut stopped = entry(Some("interactive"));
+        stopped.state = Some("stopped".into());
+        assert!(!is_attachable(&stopped));
+
+        let mut completed = entry(Some("background"));
+        completed.state = Some("completed".into());
+        assert!(!is_attachable(&completed));
     }
 
     #[test]
     fn interactive_and_unknown_kinds_are_attachable() {
         assert!(is_attachable(&entry(Some("interactive"))));
         assert!(is_attachable(&entry(None)));
+    }
+
+    #[test]
+    fn importable_sessions_are_current_workspace_only() {
+        let mut current = entry(Some("interactive"));
+        current.session_id = Some("current".into());
+        current.name = Some("Current repo".into());
+        current.cwd = Some("/repo/a".into());
+        let mut other = entry(Some("interactive"));
+        other.session_id = Some("other".into());
+        other.cwd = Some("/repo/b".into());
+        let mut background = entry(Some("background"));
+        background.session_id = Some("bg".into());
+        background.cwd = Some("/repo/a".into());
+
+        let out = importable_entries(vec![current, other, background], "/repo/a", &HashSet::new());
+
+        // Both interactive and background sessions in the current workspace are importable
+        assert_eq!(out.len(), 2);
+        let ids: Vec<_> = out.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"current"));
+        assert!(ids.contains(&"bg"));
+    }
+
+    #[test]
+    fn stopped_sessions_are_not_importable() {
+        let mut stopped = entry(Some("interactive"));
+        stopped.session_id = Some("stopped1".into());
+        stopped.state = Some("stopped".into());
+        stopped.cwd = Some("/repo/a".into());
+
+        let mut completed = entry(Some("background"));
+        completed.session_id = Some("completed1".into());
+        completed.state = Some("completed".into());
+        completed.cwd = Some("/repo/a".into());
+
+        let mut active = entry(Some("background"));
+        active.session_id = Some("active1".into());
+        active.state = Some("working".into());
+        active.cwd = Some("/repo/a".into());
+
+        let out = importable_entries(vec![stopped, completed, active], "/repo/a", &HashSet::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "active1");
+    }
+
+    #[test]
+    fn reset_paths_are_synapse_owned_only() {
+        let paths = synapse_data_paths(PathBuf::from("/home/me"));
+        assert!(paths.iter().any(|p| p.ends_with(".synapse/projects.json")));
+        assert!(paths
+            .iter()
+            .any(|p| p.ends_with(".synapse/session_meta.json")));
+        assert!(paths.iter().any(|p| p.ends_with(".synapse/config.json")));
+        assert!(paths.iter().any(|p| p.ends_with(".synapse/pairing-code")));
+        assert!(paths.iter().any(|p| p.ends_with(".synapse/models.json")));
+        assert!(!paths
+            .iter()
+            .any(|p| p.to_string_lossy().contains(".claude")));
     }
 
     #[test]
@@ -901,6 +1127,8 @@ mod tests {
                 cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
                 name: None,
                 model: None,
+                effort: None,
+                thinking: None,
                 permission_mode: None,
                 agent: None,
             })
@@ -937,6 +1165,8 @@ mod tests {
                 cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
                 name: None,
                 model: None,
+                effort: None,
+                thinking: None,
                 permission_mode: None,
                 agent: None,
             })

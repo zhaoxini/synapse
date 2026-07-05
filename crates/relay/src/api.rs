@@ -243,7 +243,26 @@ struct PairingCodeResp {
     expires_in: i64,
 }
 
-async fn create_pairing_code(State(s): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct CreatePairingCodeBody {
+    #[serde(default)]
+    code: Option<String>,
+}
+
+fn clean_pairing_code(input: &str) -> Option<String> {
+    let code: String = input.chars().filter(|c| c.is_ascii_digit()).collect();
+    if code.len() == 6 {
+        Some(code)
+    } else {
+        None
+    }
+}
+
+async fn create_pairing_code(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<CreatePairingCodeBody>>,
+) -> impl IntoResponse {
     let (device_id, device_token) = match device_auth(&s, &headers) {
         Ok(v) => v,
         Err(r) => return r,
@@ -256,17 +275,17 @@ async fn create_pairing_code(State(s): State<AppState>, headers: HeaderMap) -> i
         return api_error(StatusCode::UNAUTHORIZED, "invalid device credentials");
     }
     let expires = chrono::Utc::now().timestamp() + PAIRING_CODE_SECS;
-    if let Ok(Some((existing, _))) = s.db.pairing_code_for_device(&device_id) {
-        if let Err(e) = s.db.extend_pairing_code(&existing, &device_id, expires) {
-            return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
-        }
-        return Json(PairingCodeResp {
-            code: existing,
-            expires_in: PAIRING_CODE_SECS,
-        })
-        .into_response();
-    }
-    let code = new_pairing_code();
+    let requested = body
+        .and_then(|Json(b)| b.code)
+        .and_then(|c| clean_pairing_code(&c));
+    let code = match requested {
+        Some(c) => c,
+        None => match s.db.pairing_code_for_device(&device_id) {
+            Ok(Some((existing, _))) => existing,
+            Ok(None) => new_pairing_code(),
+            Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        },
+    };
     if let Err(e) = s.db.create_pairing_code(&code, &device_id, expires) {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
@@ -298,6 +317,9 @@ async fn exchange_pairing_code(
         Ok(None) => return api_error(StatusCode::NOT_FOUND, "device not found"),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
+    if !s.registry.is_online(&device_id).await {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "device offline");
+    }
     match issue_connect_token(&s, &device_id, &user_id) {
         Ok(v) => Json(v).into_response(),
         Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -325,7 +347,9 @@ async fn claim_pairing_code(
             "pairing code belongs to another account",
         );
     }
-    let _ = s.db.delete_pairing_code(code);
+    if !s.registry.is_online(&device_id).await {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "device offline");
+    }
     match issue_connect_token(&s, &device_id, &user_id) {
         Ok(v) => Json(v).into_response(),
         Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -403,4 +427,15 @@ pub fn verify_ws_token(db: &Db, device_id: &str, token: &str) -> Result<bool, an
 /// Verify uplink uses device_token only (not short-lived connect tokens).
 pub fn verify_uplink_token(db: &Db, device_id: &str, token: &str) -> Result<bool, anyhow::Error> {
     db.verify_device_token(device_id, token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_code_body_accepts_six_digits() {
+        let body: CreatePairingCodeBody = serde_json::from_str(r#"{"code":"123456"}"#).unwrap();
+        assert_eq!(body.code.as_deref(), Some("123456"));
+    }
 }
