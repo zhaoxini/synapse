@@ -13,6 +13,7 @@ use axum::{
         ws::{Message, WebSocket},
         Query, State, WebSocketUpgrade,
     },
+    http::Method,
     response::IntoResponse,
     routing::get,
     Router,
@@ -22,6 +23,7 @@ use rand::seq::SliceRandom;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -45,6 +47,10 @@ pub fn router(manager: Arc<SessionManager>, token: Option<String>, port: u16) ->
         token: token.clone(),
         port,
     };
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/pair", get(pair))
@@ -54,6 +60,7 @@ pub fn router(manager: Arc<SessionManager>, token: Option<String>, port: u16) ->
             axum::routing::post(exchange_pairing_code),
         )
         .route("/", get(ws_handler))
+        .layer(cors)
         .with_state(state);
     (app, token)
 }
@@ -599,4 +606,49 @@ async fn client_loop(state: AppState, socket: WebSocket) {
     out_pump.abort();
     event_pump.abort();
     tracing::info!("ws client disconnected");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claude::ClaudeBin;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn pairing_exchange_allows_local_web_cors_preflight() {
+        let manager = SessionManager::new(
+            ClaudeBin(PathBuf::from("/nonexistent/claude")),
+            std::env::temp_dir(),
+            None,
+        );
+        let (app, _) = router(manager, Some("TEST".to_string()), 4173);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        let resp = reqwest::Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{addr}/api/v1/pairing-codes/exchange"),
+            )
+            .header("Origin", "http://127.0.0.1:8000")
+            .header("Access-Control-Request-Method", "POST")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("*")
+        );
+
+        server.abort();
+    }
 }

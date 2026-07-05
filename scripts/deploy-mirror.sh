@@ -7,7 +7,7 @@ set -euo pipefail
 
 RELAY_SSH="${RELAY_SSH:-root@192.3.179.202}"
 RELAY_HOST="${RELAY_HOST:-zx0623.duckdns.org}"
-VERSION="${SYNAPSE_VERSION:-v0.2.7}"
+VERSION="${SYNAPSE_VERSION:-v0.2.8}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 info() { printf '==> %s\n' "$*"; }

@@ -1,3 +1,10 @@
+## Synapse v0.2.8 — Local pairing CORS fix
+
+- Fixed browser pairing from `http://127.0.0.1:8000/?code=...` to local server `:4173` by enabling CORS on the local API.
+- Added regression coverage for local pairing preflight.
+
+---
+
 ## Synapse v0.2.7 — Fixed local pairing code
 
 - `synapse-server login` is now interactive by default; relay/email/password flags are optional.
